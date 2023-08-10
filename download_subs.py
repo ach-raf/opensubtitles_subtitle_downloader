@@ -74,9 +74,9 @@ def main(language_choice):
 
 
 if __name__ == "__main__":
-    # Usage: python main.py <path_to_media_file>
-    # Usage: python main.py <path_to_media_file> <path_to_media_file> # multiple files
-    # Usage: python main.py <path_to_media_folder>
-    # Usage: python main.py <path_to_media_folder> <path_to_media_folder> # multiple folders
+    # Usage: python download_subs.py <path_to_media_file>
+    # Usage: python download_subs.py <path_to_media_file> <path_to_media_file> # multiple files
+    # Usage: python download_subs.py <path_to_media_folder>
+    # Usage: python download_subs.py <path_to_media_folder> <path_to_media_folder> # multiple folders
     language_choice = OSD_LANGUAGES[options_menu()]
     main(language_choice)

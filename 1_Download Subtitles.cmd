@@ -1,4 +1,4 @@
 @echo off
 cls
-C:\programming\new_opensubtitles\venv\Scripts\python.exe C:\programming\new_opensubtitles\download_subs.py %*
+cmd /k "cd /d C:\programming\sync_subs\venv\Scripts & activate & cd /d    C:\programming\sync_subs & python sync_subs.py %*
 pause

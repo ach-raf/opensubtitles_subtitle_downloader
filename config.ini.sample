@@ -1,4 +1,4 @@
-# ==== OpenSubtitles.org server settings =======================================
+# ==== OpenSubtitles.com server settings =======================================
 [SETTINGS]
 osd_username = USERNAME
 osd_password = PASSWORD

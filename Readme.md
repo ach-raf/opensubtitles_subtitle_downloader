@@ -22,7 +22,7 @@ git clone https://github.com/ach-raf/opensubtitles_subtitle_downloader.git
 pip install -r requirements.txt
 ```
 
-4. Add your OpenSubtitles.org credentials to `config.ini`
+4. Add your OpenSubtitles.com credentials to `config.ini`
 
 ```ini
 [SETTINGS]
@@ -82,7 +82,7 @@ To download subtitles for all video files in a folder:
 python download_subs.py <path/to/folder>
 ```
 
-It will search the folder recursively for video files and download subtitles.
+It will search the folder for video files and download subtitles.
 
 ### Multiple folders
 
@@ -92,7 +92,7 @@ To download subtitles for multiple folders:
 python download_subs.py <path/to/folder1> <path/to/folder2>
 ```
 
-It will look in both folders recursively for video files and download subtitles.
+It will look in both folders for video files and download subtitles.
 
 The language can be changed in the config.ini file, and dynamically shown in the interactive menu.
 

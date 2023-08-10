@@ -4,6 +4,8 @@ import struct
 import requests
 import json
 from pathlib import Path
+import library.clean_subtitles as clean_subtitles
+import library.sync_subtitles as sync_subtitles
 
 
 class OpenSubtitles:
@@ -154,9 +156,13 @@ class OpenSubtitles:
             "Authorization": f"{self.token}",
         }
         payload = {}
-        payload["file_id"] = int(
-            selected_subtitles["attributes"]["files"][0]["file_id"]
-        )
+        try:
+            payload["file_id"] = int(
+                selected_subtitles["attributes"]["files"][0]["file_id"]
+            )
+        except TypeError:
+            print(f"{selected_subtitles=}")
+            exit()
 
         response = requests.post(url, headers=headers, data=json.dumps(payload))
         return response.json()["link"]
@@ -171,9 +177,7 @@ class OpenSubtitles:
         path = Path(media_path)
         hash = self.hashFile(media_path)
         media_name = path.stem
-        subtitle_path = Path(
-            path.parent, f"{media_name}.srt"
-        )  # path.parent / f"{media_name}.srt"
+        subtitle_path = Path(path.parent, f"{media_name}.srt")
         results = self.search(
             media_hash=hash, media_name=media_name, languages=language_choice
         )
@@ -182,6 +186,8 @@ class OpenSubtitles:
         print(f">> Downloading {language_choice} subtitles for {media_path}")
         self.print_subtitle_info(selected_sub)
         self.save_subtitle(download_link, subtitle_path)
+        self.clean_subtitles(subtitle_path)
+        self.sync_subtitles(media_path)
 
     def check_if_media_file(self, media_path):
         path = Path(media_path)
@@ -205,6 +211,12 @@ class OpenSubtitles:
                         self.download_single_subtitle(file, language_choice)
             elif self.check_if_media_file(media_path):
                 self.download_single_subtitle(media_path, language_choice)
+
+    def clean_subtitles(self, subtitle_path):
+        clean_subtitles.clean_ads(subtitle_path)
+
+    def sync_subtitles(self, media_path):
+        sync_subtitles.sync_subs_audio(media_path)
 
     def print_subtitle_info(self, sub):
         movie_name = sub["attributes"]["feature_details"]["movie_name"]
