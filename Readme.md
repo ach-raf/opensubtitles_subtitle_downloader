@@ -1,6 +1,12 @@
 # Opensubtitles.com subtitle downloader
 
-This is a Python script to download subtitles from OpenSubtitles.com.
+This is a Python script to download subtitles from OpenSubtitles.com and process them.
+
+It can:
+
+- Download subtitles
+- Clean subtitles of ads
+- Sync subtitles to audio (using [ffsubsync](https://github.com/smacke/ffsubsync))
 
 You can get an API key by registering at https://www.opensubtitles.com/en/consumers .
 
