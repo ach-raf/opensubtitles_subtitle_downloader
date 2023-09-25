@@ -210,7 +210,7 @@ class OpenSubtitles:
         self.print_subtitle_info(selected_sub)
         self.save_subtitle(download_link, subtitle_path)
         self.clean_subtitles(subtitle_path)
-        self.sync_subtitles(media_path)
+        self.sync_subtitles(media_path, subtitle_path)
 
     def check_if_media_file(self, media_path):
         path = Path(media_path)
@@ -238,8 +238,8 @@ class OpenSubtitles:
     def clean_subtitles(self, subtitle_path):
         clean_subtitles.clean_ads(subtitle_path)
 
-    def sync_subtitles(self, media_path):
-        sync_subtitles.sync_subs_audio(media_path)
+    def sync_subtitles(self, media_path, subtitle_path):
+        sync_subtitles.sync_subs_audio(media_path, subtitle_path)
 
     def print_subtitle_info(self, sub):
         movie_name = sub["attributes"]["feature_details"]["movie_name"]

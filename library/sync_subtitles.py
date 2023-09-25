@@ -21,19 +21,19 @@ def sync_subs_srt(_reference_srt, _unsync_srt, _output):
     subprocess.call(_command)
 
 
-def sync_subs_audio(_media_path):
-    _media_path = Path(_media_path)
+def sync_subs_audio(media_path, subtitle_path):
+    media_path = Path(media_path)
+    subtitle_path = Path(subtitle_path)
     current_extension = "srt"
-    if os.path.exists(Path(_media_path.parent, f"{_media_path.stem}.ass")):
+    if os.path.exists(Path(media_path.parent, f"{media_path.stem}.ass")):
         current_extension = "ass"
 
-    subtitle_path = Path(_media_path.parent, f"{_media_path.stem}.{current_extension}")
-    _media_path = _media_path.resolve()
+    media_path = media_path.resolve()
     subtitle_path = subtitle_path.resolve()
     # using subsync library to do the magic
     _command = [
         "ffs",
-        f"{_media_path}",  # path to the video
+        f"{media_path}",  # path to the video
         "-i",
         f"{subtitle_path}",  # the subtitle for input, using the same name as the film + .srt
         "-o",
