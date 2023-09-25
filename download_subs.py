@@ -3,6 +3,8 @@ import sys
 import configparser
 import library.OpenSubtitles as OpenSubtitles
 import json
+import threading
+import multiprocessing
 
 
 def read_config_file(file_path):
@@ -67,10 +69,43 @@ def options_menu():
         sys.exit()
 
 
+def main_multiprocessing(language_choice):
+    media_path_list = sys.argv[1:]
+
+    # Split the media_path_list into two parts
+    split_index = len(media_path_list) // 2
+    first_half = media_path_list[:split_index]
+    second_half = media_path_list[split_index:]
+
+    open_subtitles = OpenSubtitles.OpenSubtitles(
+        OSD_USERNAME, OSD_PASSWORD, OSD_API_KEY
+    )
+
+    # Create two threads to run in parallel
+    thread1 = multiprocessing.Process(
+        target=open_subtitles.download_subtitles, args=(first_half, language_choice)
+    )
+    thread2 = multiprocessing.Process(
+        target=open_subtitles.download_subtitles, args=(second_half, language_choice)
+    )
+
+    # Start the threads
+    thread1.start()
+    thread2.start()
+
+    # Wait for both threads to finish
+    thread1.join()
+    thread2.join()
+
+
 def main(language_choice):
     media_path_list = sys.argv[1:]
-    subtitles = OpenSubtitles.OpenSubtitles(OSD_USERNAME, OSD_PASSWORD, OSD_API_KEY)
-    subtitles.download_subtitles(media_path_list, language_choice)
+
+    open_subtitles = OpenSubtitles.OpenSubtitles(
+        OSD_USERNAME, OSD_PASSWORD, OSD_API_KEY
+    )
+
+    open_subtitles.download_subtitles(media_path_list, language_choice)
 
 
 if __name__ == "__main__":
@@ -79,4 +114,4 @@ if __name__ == "__main__":
     # Usage: python download_subs.py <path_to_media_folder>
     # Usage: python download_subs.py <path_to_media_folder> <path_to_media_folder> # multiple folders
     language_choice = OSD_LANGUAGES[options_menu()]
-    main(language_choice)
+    main_multiprocessing(language_choice)

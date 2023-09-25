@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import library.clean_subtitles as clean_subtitles
 import library.sync_subtitles as sync_subtitles
+import library.utils as utils
 
 
 class OpenSubtitles:
@@ -63,10 +64,15 @@ class OpenSubtitles:
             return "IOError"
 
     def login(self):
+        if utils.read_token():
+            return utils.read_token()
+
         url = "https://api.opensubtitles.com/api/v1/login"
+
         payload = {"username": self.username, "password": self.password}
         headers = {
             "Content-Type": "application/json",
+            "User-Agent": "nakrad v1.0",
             "Accept": "application/json",
             "Api-Key": self.api_key,
         }
@@ -74,10 +80,14 @@ class OpenSubtitles:
         token = None
         try:
             token = response.json()["token"]
-        except KeyError:
-            print(f"Error: {response.json()}")
+            utils.save_token(token)
+            return token
+        except KeyError as e:
+            print(f"Error: {response.json()}, {e}")
             exit()
-        return token
+        except json.decoder.JSONDecodeError as e:
+            print(f"Error: {response.text}, {e}")
+            exit()
 
     def search(
         self,
@@ -89,14 +99,15 @@ class OpenSubtitles:
         url = "https://api.opensubtitles.com/api/v1/subtitles"
         params = {
             "languages": languages,
-            "order_by": "votes",
-            "order_direction": "desc",
+            # "order_by": "votes",
+            # "order_direction": "desc",
         }
         headers = {
-            "Content-Type": "application/json",
             "Accept": "application/json",
+            "Content-Type": "application/json",
             "Api-Key": self.api_key,
             "Authorization": f"Bearer {self.token}",
+            "User-Agent": "nakrad v1.0",
         }
         if imdb_id:
             params["imdb_id"] = imdb_id
@@ -106,12 +117,18 @@ class OpenSubtitles:
 
         if media_name:
             params["query"] = media_name
+        print(params)
         response = requests.get(url, headers=headers, params=params)
-        response.raise_for_status()
-        return response.json()["data"]
+        try:
+            response.raise_for_status()
+            return response.json()["data"]
+        except requests.exceptions.HTTPError as e:
+            print(f"Error: {response.json()}, {e}")
+            exit()
 
     def auto_select_sub(self, video_file_name, _subtitles_result_list):
-        _subtitles_selected = ""
+        print(f"_subtitles_result_list : {len(_subtitles_result_list)}")
+        _subtitles_selected = None
         """Automatic subtitles selection, by hash or using filename match"""
         video_file_parts = (
             video_file_name.replace("-", ".")
@@ -150,10 +167,11 @@ class OpenSubtitles:
     def get_download_link(self, selected_subtitles):
         url = "https://api.opensubtitles.com/api/v1/download"
         headers = {
-            "Content-Type": "application/json",
             "Accept": "application/json",
+            "Content-Type": "application/json",
             "Api-Key": self.api_key,
-            "Authorization": f"{self.token}",
+            "Authorization": f"Bearer {self.token}",
+            "User-Agent": "nakrad v1.0",
         }
         payload = {}
         try:
@@ -165,7 +183,11 @@ class OpenSubtitles:
             exit()
 
         response = requests.post(url, headers=headers, data=json.dumps(payload))
-        return response.json()["link"]
+        try:
+            return response.json()["link"]
+        except KeyError as e:
+            print(f"Error: {response.json()}, {e}")
+            exit()
 
     def save_subtitle(self, url, path):
         """Download and save subtitle file from url to path"""
@@ -177,10 +199,11 @@ class OpenSubtitles:
         path = Path(media_path)
         hash = self.hashFile(media_path)
         media_name = path.stem
-        subtitle_path = Path(path.parent, f"{media_name}.srt")
+        subtitle_path = Path(path.parent, f"{media_name}_{language_choice}.srt")
         results = self.search(
             media_hash=hash, media_name=media_name, languages=language_choice
         )
+        print(f"Found {len(results)} subtitles for {media_name}")
         selected_sub = self.auto_select_sub(media_name, results)
         download_link = self.get_download_link(selected_sub)
         print(f">> Downloading {language_choice} subtitles for {media_path}")
