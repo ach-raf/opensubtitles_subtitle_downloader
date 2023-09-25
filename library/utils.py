@@ -2,7 +2,11 @@ import pickle
 import os
 import time
 
-TOKEN_STORAGE_FILE = "token.pkl"
+# ================================ Paths =============================
+CURRENT_DIR_PATH = os.path.dirname(os.path.realpath(__file__))
+INFO_FILE_PATH = os.path.join(CURRENT_DIR_PATH, "config.ini")
+TOKEN_STORAGE_FILE = os.path.join(CURRENT_DIR_PATH, "token.pkl")
+# ====================================================================
 
 
 def save_token(token):

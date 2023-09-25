@@ -257,7 +257,7 @@ class OpenSubtitles:
         except KeyError:
             pass
 
-        print(f"Media Name: {movie_name}")
+        print(f"Media Name: {movie_name}, sub_id: {sub_id}")
         print(f"file_id {file_id}, hash: {media_hash}")
         print(f"- Language: {language}")
         print(f"- Release: {release}")
