@@ -36,5 +36,12 @@ def read_token():
     return False
 
 
+def shuffle_list(list):
+    import random
+
+    random.shuffle(list)
+    return list
+
+
 if __name__ == "__main__":
     print("This is a Module")

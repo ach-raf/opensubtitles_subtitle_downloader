@@ -3,6 +3,7 @@ import os
 import struct
 import requests
 import json
+import random
 from pathlib import Path
 import library.clean_subtitles as clean_subtitles
 import library.sync_subtitles as sync_subtitles
@@ -139,6 +140,8 @@ class OpenSubtitles:
         )
         max_score = -1
 
+        # make the list random to avoid selecting the same sub every time
+        random.shuffle(_subtitles_result_list)
         for subtitle in _subtitles_result_list:
             score = 0
             # extra point if the sub is found by hash
