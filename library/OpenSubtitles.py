@@ -124,7 +124,7 @@ class OpenSubtitles:
             return response.json()["data"]
         except requests.exceptions.HTTPError as e:
             print(f"Error: {response.json()}, {e}")
-            exit()
+            return None
 
     def auto_select_sub(self, video_file_name, _subtitles_result_list):
         print(f"_subtitles_result_list : {len(_subtitles_result_list)}")
@@ -203,6 +203,9 @@ class OpenSubtitles:
         results = self.search(
             media_hash=hash, media_name=media_name, languages=language_choice
         )
+        if not results:
+            print(f"No subtitles found for {media_name}")
+            return False
         print(f"Found {len(results)} subtitles for {media_name}")
         selected_sub = self.auto_select_sub(media_name, results)
         download_link = self.get_download_link(selected_sub)
@@ -211,6 +214,7 @@ class OpenSubtitles:
         self.save_subtitle(download_link, subtitle_path)
         self.clean_subtitles(subtitle_path)
         self.sync_subtitles(media_path, subtitle_path)
+        return True
 
     def check_if_media_file(self, media_path):
         path = Path(media_path)
@@ -231,7 +235,9 @@ class OpenSubtitles:
             if path.is_dir():
                 for file in path.iterdir():
                     if self.check_if_media_file(file):
-                        self.download_single_subtitle(file, language_choice)
+                        result = self.download_single_subtitle(file, language_choice)
+                        if not result:
+                            print(f"Could not find subtitles for {file}")
             elif self.check_if_media_file(media_path):
                 self.download_single_subtitle(media_path, language_choice)
 
