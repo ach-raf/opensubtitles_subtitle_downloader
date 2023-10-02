@@ -2,3 +2,4 @@ requests
 black
 ffmpeg
 ffsubsync
+spacy
