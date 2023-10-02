@@ -14,7 +14,7 @@ import spacy
 
 class OpenSubtitles:
     def __init__(self, username, password, api_key):
-        self.nlp = spacy.load("en_core_web_md")
+        # self.nlp = spacy.load("en_core_web_md")
         self.username = username
         self.password = password
         self.api_key = api_key
@@ -165,7 +165,7 @@ class OpenSubtitles:
         union = len(a) + len(b) - intersection
         return intersection / union
 
-    def auto_select_sub_new(self, video_file_name, subtitles_result_list):
+    """def auto_select_sub_new(self, video_file_name, subtitles_result_list):
         # print(f"_subtitles_result_list: {len(subtitles_result_list)}")
         subtitles_selected = None
         max_similarity = -1
@@ -190,7 +190,7 @@ class OpenSubtitles:
                 max_similarity = similarity
                 subtitles_selected = subtitle
 
-        return subtitles_selected
+        return subtitles_selected"""
 
     def auto_select_sub(self, video_file_name, _subtitles_result_list):
         # print(f"_subtitles_result_list : {len(_subtitles_result_list)}")
