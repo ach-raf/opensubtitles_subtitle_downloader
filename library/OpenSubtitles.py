@@ -18,12 +18,26 @@ class OpenSubtitles:
         self.username = username
         self.password = password
         self.api_key = api_key
-        self.search_level = 0
         self.token = self.login()
 
     def sort_list_of_dicts_by_key(self, input_list, key_to_sort_by):
+        # Create an empty set to store unique 'id' values
+        unique_ids = set()
+
+        # Initialize an empty list to store unique items
+        unique_data = []
+
+        # Iterate through the list of dictionaries
+        for item in input_list:
+            item_id = item["id"]
+
+            # Check if the 'id' is not already in the set of unique_ids
+            if item_id not in unique_ids:
+                unique_ids.add(item_id)
+                unique_data.append(item)
+
         sorted_list = sorted(
-            input_list, key=lambda x: x["attributes"][key_to_sort_by], reverse=True
+            unique_data, key=lambda x: x["attributes"][key_to_sort_by], reverse=True
         )
         return sorted_list
 
@@ -137,7 +151,85 @@ class OpenSubtitles:
             print(f"Error: {response.json()}, {e}")
             return None
 
-    def extract_episode_info(self, media_name):
+    def extract_episode_info(self, input_string):
+        # Split the input string by spaces, hyphens, and periods
+        parts = re.split(r"[ \-\.]+", input_string)
+
+        # Initialize variables to store title, season, and episode
+        title = ""
+        season = ""
+        episode = ""
+
+        for part in parts:
+            # Check if the part represents a season and episode
+            if re.match(r"S\d{2}E\d{2}", part):
+                season_episode = re.findall(r"\d{2}", part)
+                if len(season_episode) == 2:
+                    season, episode = season_episode
+            else:
+                # If not a season and episode, add it to the title
+                title += part + " "
+
+        # Remove trailing spaces from title
+        title = title.strip()
+
+        # If season and episode are found, format the extracted information
+        if season and episode:
+            formatted_info = f"{title} {season}x{episode}"
+            return formatted_info
+
+        return None
+
+    def get_episode_info_new(self, input_string):
+        # Define a regular expression pattern to capture season and episode information
+        pattern = r"S(\d{2})E(\d{2})"
+
+        # Search for the pattern in the input string
+        match = re.search(pattern, input_string)
+
+        if match:
+            # Extract season and episode numbers
+            season = match.group(1)
+            episode = match.group(2)
+
+            # Split the input string by the season and episode pattern
+            parts = re.split(pattern, input_string)
+
+            if len(parts) >= 2:
+                title = parts[0].strip()
+            else:
+                title = input_string.strip()
+
+            # Format the extracted information
+            formatted_info = f"{title} {season}x{episode}"
+
+            return formatted_info
+
+        return None
+
+    def get_episode_info(self, media_name):
+        # Define a regular expression pattern to match the required information
+        patterns = [
+            r"([^()]+)\s\((\d{4})\)\s-\sS(\d{2})E(\d{2})",  # Format 1
+            r'([^"]+)"\sEpisode\s#(\d+\.\d+)\sS(\d{2})E(\d{2})',  # Format 2
+            r"([^()]+)\s-\s(\d{2})x(\d{2})\s-\s([^()]+)",  # Format 3
+            r"([^()]+)\sS(\d{2})E(\d{2})",  # Format 4
+        ]
+
+        for pattern in patterns:
+            # Use regex to search for the pattern in the input string
+            match = re.search(pattern, media_name)
+
+            if match:
+                # Extract the relevant groups from the match
+                title = match.group(1) if match.group(1) else ""
+                year = match.group(2) if match.group(2) else ""
+                season = match.group(3) if match.group(3) else ""
+                episode = match.group(4) if match.group(4) else ""
+                return title, year, season, episode
+        return None
+
+    def get_alternate_names(self, media_name):
         # Define a regular expression pattern to match the required information
         pattern = r"([^()]+)\s\((\d{4})\)\s-\sS(\d{2})E(\d{2})"
 
@@ -152,9 +244,20 @@ class OpenSubtitles:
             episode = match.group(4)
 
             # Format the extracted information
-            formatted_info = f"{title} {season}x{episode}"
+            formatted_info_1 = f"{title} {season}x{episode}"
+            formatted_info_2 = f"{title} S{season.zfill(2)}E{episode.zfill(2)}"
+            formatted_info_3 = f"{title} Episode #{season}.{episode}"
+            # add format, the-uncanny-counter-episode-2-1
+            formatted_info_4 = f"{title.replace(' ', '-').lower()}-episode-{int(season)}-{int(episode)}"
 
-            return formatted_info
+            result = [
+                formatted_info_1,
+                formatted_info_2,
+                formatted_info_3,
+                formatted_info_4,
+            ]
+
+            return result
         else:
             return None
 
@@ -206,7 +309,7 @@ class OpenSubtitles:
         max_score = -1
 
         # make the list random to avoid selecting the same sub every time
-        random.shuffle(_subtitles_result_list)
+        # random.shuffle(_subtitles_result_list)
         for subtitle in _subtitles_result_list:
             score = 0
             # extra point if the sub is found by hash
@@ -272,24 +375,25 @@ class OpenSubtitles:
         results = self.search(
             media_hash=hash, media_name=media_name, languages=language_choice
         )
+        print(f"Searcing for subtitles for {media_name}, found {len(results)} results")
+        # add more results, by searching with the new search term
+        new_search_terms = self.get_alternate_names(media_name)
+        if new_search_terms:
+            for term in new_search_terms:
+                temp_results = self.search(
+                    media_hash=hash,
+                    media_name=term,
+                    languages=language_choice,
+                )
+                results.extend(temp_results)
+                print(
+                    f"Adding more results by searching for {term}, found {len(temp_results)} results"
+                )
         if not results:
-            if self.search_level != 0:
-                print(f"No subtitles found for {media_name}")
-                return False
-            new_search_term = self.extract_episode_info(media_name)
-            print(
-                f"No subtitles found for {media_name}, \nNew search term: {new_search_term}"
-            )
-            self.search_level = 1
-            self.download_single_subtitle(
-                media_path,
-                language_choice,
-                media_name=new_search_term,
-            )
+            print(f"No subtitles found for {media_name}, or {new_search_terms}")
+            return False
 
         sorted_results = self.sort_list_of_dicts_by_key(results, "download_count")
-        self.search_level = 0
-
         print(f"Found {len(sorted_results)} subtitles for {media_name}")
         selected_sub = self.auto_select_sub(media_name, sorted_results)
         download_link = self.get_download_link(selected_sub)
