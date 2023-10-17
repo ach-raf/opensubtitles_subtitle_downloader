@@ -12,32 +12,7 @@ You can get an API key by registering at https://www.opensubtitles.com/en/consum
 
 ## Installation
 
-### Windows
-
-1. Install Python
-
-2. Clone this repository, or download the zip file and extract it
-
-```
-git clone https://github.com/ach-raf/opensubtitles_subtitle_downloader.git
-```
-
-3. Install requirements
-
-```
-pip install -r requirements.txt
-```
-
-4. Add your OpenSubtitles.com credentials to `config.ini`
-
-```ini
-[SETTINGS]
-osd_username = YOUR_USERNAME
-osd_password = YOUR_PASSWORD
-osd_api_key = YOUR_API_KEY
-```
-
-### Linux
+### Linux, Windows
 
 1. Install Python
 
@@ -60,6 +35,7 @@ pip3 install -r requirements.txt
 osd_username = YOUR_USERNAME
 osd_password = YOUR_PASSWORD
 osd_api_key = YOUR_API_KEY
+osd_user_agent = YOUR_USER_AGENT
 ```
 
 ## Usage
