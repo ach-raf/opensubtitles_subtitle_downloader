@@ -13,12 +13,23 @@ import spacy
 
 
 class OpenSubtitles:
-    def __init__(self, username, password, api_key):
+    def __init__(
+        self,
+        username,
+        password,
+        api_key,
+        user_agent,
+        sync_choice=False,
+        hearing_impaired=False,
+    ):
         # self.nlp = spacy.load("en_core_web_md")
         self.username = username
         self.password = password
         self.api_key = api_key
+        self.user_agent = user_agent
         self.token = self.login()
+        self.sync_choice = sync_choice
+        self.hearing_impaired = hearing_impaired
 
     def sort_list_of_dicts_by_key(self, input_list, key_to_sort_by):
         # Create an empty set to store unique 'id' values
@@ -89,15 +100,16 @@ class OpenSubtitles:
             return "IOError"
 
     def login(self):
-        if utils.read_token():
-            return utils.read_token()
+        token = utils.read_token()
+        if token:
+            return token
 
         url = "https://api.opensubtitles.com/api/v1/login"
 
         payload = {"username": self.username, "password": self.password}
         headers = {
             "Content-Type": "application/json",
-            "User-Agent": "nakrad v1.0",
+            "User-Agent": self.user_agent,
             "Accept": "application/json",
             "Api-Key": self.api_key,
         }
@@ -122,8 +134,10 @@ class OpenSubtitles:
         languages="en,ar",
     ):
         url = "https://api.opensubtitles.com/api/v1/subtitles"
+        hearing_impaired = "include" if self.hearing_impaired else "exclude"
         params = {
             "languages": languages,
+            "hearing_impaired": hearing_impaired,
             # "order_by": "votes",
             # "order_direction": "desc",
         }
@@ -132,7 +146,7 @@ class OpenSubtitles:
             "Content-Type": "application/json",
             "Api-Key": self.api_key,
             "Authorization": f"Bearer {self.token}",
-            "User-Agent": "nakrad v1.0",
+            "User-Agent": self.user_agent,
         }
         if imdb_id:
             params["imdb_id"] = imdb_id
@@ -268,33 +282,6 @@ class OpenSubtitles:
         union = len(a) + len(b) - intersection
         return intersection / union
 
-    """def auto_select_sub_new(self, video_file_name, subtitles_result_list):
-        # print(f"_subtitles_result_list: {len(subtitles_result_list)}")
-        subtitles_selected = None
-        max_similarity = -1
-
-        # Process the video file name with spaCy
-        video_file_doc = self.nlp(video_file_name)
-
-        for subtitle in subtitles_result_list:
-            # if the subtitle is found by hash, return it
-            if subtitle["attributes"]["moviehash_match"]:
-                return subtitle
-            release_name = subtitle["attributes"]["release"]
-
-            # Process the subtitle release name with spaCy
-            release_name_doc = self.nlp(release_name)
-
-            # Calculate similarity between video file name and subtitle release name
-            similarity = video_file_doc.similarity(release_name_doc)
-
-            # Update subtitles_selected if a better match is found
-            if similarity > max_similarity:
-                max_similarity = similarity
-                subtitles_selected = subtitle
-
-        return subtitles_selected"""
-
     def auto_select_sub(self, video_file_name, _subtitles_result_list):
         # print(f"_subtitles_result_list : {len(_subtitles_result_list)}")
         _subtitles_selected = None
@@ -314,7 +301,7 @@ class OpenSubtitles:
             score = 0
             # extra point if the sub is found by hash
             if subtitle["attributes"]["moviehash_match"]:
-                score += 10
+                return subtitle
 
             # points for filename mach
             release_name = subtitle["attributes"]["release"]
@@ -342,7 +329,7 @@ class OpenSubtitles:
             "Content-Type": "application/json",
             "Api-Key": self.api_key,
             "Authorization": f"Bearer {self.token}",
-            "User-Agent": "nakrad v1.0",
+            "User-Agent": self.user_agent,
         }
         payload = {}
         try:
@@ -401,7 +388,8 @@ class OpenSubtitles:
         self.print_subtitle_info(selected_sub)
         self.save_subtitle(download_link, subtitle_path)
         self.clean_subtitles(subtitle_path)
-        self.sync_subtitles(media_path, subtitle_path)
+        if self.sync_choice:
+            self.sync_subtitles(media_path, subtitle_path)
         return True
 
     def check_if_media_file(self, media_path):
@@ -426,8 +414,10 @@ class OpenSubtitles:
                         result = self.download_single_subtitle(file, language_choice)
                         if not result:
                             print(f"Could not find subtitles for {file}")
-            elif self.check_if_media_file(media_path):
-                self.download_single_subtitle(media_path, language_choice)
+            elif self.check_if_media_file(path):
+                result = self.download_single_subtitle(path, language_choice)
+                if not result:
+                    print(f"Could not find subtitles for {path}")
 
     def clean_subtitles(self, subtitle_path):
         clean_subtitles.clean_ads(subtitle_path)

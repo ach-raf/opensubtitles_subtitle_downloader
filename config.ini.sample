@@ -4,5 +4,6 @@ osd_username = USERNAME
 osd_password = PASSWORD
 osd_api_key = API_KEY
 osd_languages = {"English": "en", "Arabic": "ar", "French": "fr"}
+osd_user_agent = TemporaryUserAgent
 # Force downloading and storing UTF-8 encoded subtitles files.
 opt_force_utf8 = True

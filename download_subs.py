@@ -2,6 +2,7 @@ import os
 import sys
 import configparser
 import library.OpenSubtitles as OpenSubtitles
+import library.sync_subtitles as sync_subtitles
 import json
 import threading
 import multiprocessing
@@ -37,6 +38,7 @@ CONFIG_INFO = read_config_file(INFO_FILE_PATH)
 OSD_USERNAME = CONFIG_INFO["osd_username"]
 OSD_PASSWORD = CONFIG_INFO["osd_password"].replace('"', "")
 OSD_API_KEY = CONFIG_INFO["osd_api_key"]
+OSD_USER_AGENT = CONFIG_INFO["osd_user_agent"]
 OSD_LANGUAGES = json.loads(CONFIG_INFO["osd_languages"])
 OPT_FORCE_UTF8 = CONFIG_INFO["opt_force_utf8"]
 
@@ -69,7 +71,17 @@ def options_menu():
         sys.exit()
 
 
-def main_multiprocessing(language_choice):
+def sync_choice_menu():
+    print(30 * "-", "Sync subtitle to video", 30 * "-")
+    print("1. No")
+    print("2. Yes")
+    print("3. Exit")
+    print(66 * "-")
+    user_choice = int(input("Sync method: "))
+    return user_choice
+
+
+def main_multiprocessing(language_choice, sync_choice):
     media_path_list = sys.argv[1:]
 
     # Split the media_path_list into two parts
@@ -78,15 +90,17 @@ def main_multiprocessing(language_choice):
     second_half = media_path_list[split_index:]
 
     open_subtitles = OpenSubtitles.OpenSubtitles(
-        OSD_USERNAME, OSD_PASSWORD, OSD_API_KEY
+        OSD_USERNAME, OSD_PASSWORD, OSD_API_KEY, OSD_USER_AGENT
     )
 
     # Create two threads to run in parallel
     thread1 = multiprocessing.Process(
-        target=open_subtitles.download_subtitles, args=(first_half, language_choice)
+        target=open_subtitles.download_subtitles,
+        args=(first_half, language_choice),
     )
     thread2 = multiprocessing.Process(
-        target=open_subtitles.download_subtitles, args=(second_half, language_choice)
+        target=open_subtitles.download_subtitles,
+        args=(second_half, language_choice),
     )
 
     # Start the threads
@@ -102,7 +116,7 @@ def main(language_choice):
     media_path_list = sys.argv[1:]
 
     open_subtitles = OpenSubtitles.OpenSubtitles(
-        OSD_USERNAME, OSD_PASSWORD, OSD_API_KEY
+        OSD_USERNAME, OSD_PASSWORD, OSD_API_KEY, OSD_USER_AGENT
     )
 
     open_subtitles.download_subtitles(media_path_list, language_choice)
@@ -113,5 +127,7 @@ if __name__ == "__main__":
     # Usage: python download_subs.py <path_to_media_file> <path_to_media_file> # multiple files
     # Usage: python download_subs.py <path_to_media_folder>
     # Usage: python download_subs.py <path_to_media_folder> <path_to_media_folder> # multiple folders
-    language_choice = OSD_LANGUAGES[options_menu()]
-    main_multiprocessing(language_choice)
+    user_choice = options_menu()
+    language_choice = OSD_LANGUAGES[user_choice]
+    sync_choice = True if sync_choice_menu() == 2 else False
+    main_multiprocessing(language_choice, sync_choice)
