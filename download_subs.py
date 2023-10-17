@@ -77,7 +77,7 @@ def sync_choice_menu():
     print("2. Yes")
     print("3. Exit")
     print(66 * "-")
-    user_choice = int(input("Sync method: "))
+    user_choice = int(input("Sync choice: "))
     return user_choice
 
 
@@ -90,7 +90,7 @@ def main_multiprocessing(language_choice, sync_choice):
     second_half = media_path_list[split_index:]
 
     open_subtitles = OpenSubtitles.OpenSubtitles(
-        OSD_USERNAME, OSD_PASSWORD, OSD_API_KEY, OSD_USER_AGENT
+        OSD_USERNAME, OSD_PASSWORD, OSD_API_KEY, OSD_USER_AGENT, sync_choice=sync_choice
     )
 
     # Create two threads to run in parallel
@@ -116,7 +116,7 @@ def main(language_choice):
     media_path_list = sys.argv[1:]
 
     open_subtitles = OpenSubtitles.OpenSubtitles(
-        OSD_USERNAME, OSD_PASSWORD, OSD_API_KEY, OSD_USER_AGENT
+        OSD_USERNAME, OSD_PASSWORD, OSD_API_KEY, OSD_USER_AGENT, sync_choice=sync_choice
     )
 
     open_subtitles.download_subtitles(media_path_list, language_choice)
