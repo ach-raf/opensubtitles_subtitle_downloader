@@ -383,7 +383,6 @@ class OpenSubtitles:
         print(f"Found {len(sorted_results)} subtitles for {media_name}")
         selected_sub = self.auto_select_sub(media_name, sorted_results)
         download_link = self.get_download_link(selected_sub)
-        print(f"dowload link: {download_link}")
         print(f">> Downloading {language_choice} subtitles for {media_path}")
         self.print_subtitle_info(selected_sub)
         self.save_subtitle(download_link, subtitle_path)

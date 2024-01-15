@@ -41,7 +41,7 @@ OSD_API_KEY = CONFIG_INFO["osd_api_key"]
 OSD_USER_AGENT = CONFIG_INFO["osd_user_agent"]
 OSD_LANGUAGES = json.loads(CONFIG_INFO["osd_languages"])
 
-SKIP_INTERACTIVE_MENU = CONFIG_INFO["osd_skip_interactive_menu"]
+SKIP_INTERACTIVE_MENU = CONFIG_INFO["skip_interactive_menu"]
 SKIP_SYNC = CONFIG_INFO["skip_sync"]
 OPT_FORCE_UTF8 = CONFIG_INFO["opt_force_utf8"]
 
@@ -130,9 +130,10 @@ if __name__ == "__main__":
     # Usage: python download_subs.py <path_to_media_file> <path_to_media_file> # multiple files
     # Usage: python download_subs.py <path_to_media_folder>
     # Usage: python download_subs.py <path_to_media_folder> <path_to_media_folder> # multiple folders
-    if SKIP_INTERACTIVE_MENU == "True":
+    if SKIP_INTERACTIVE_MENU.strip().lower() == "true":
         language_choice = list(OSD_LANGUAGES.items())[0][1]
-        sync_choice = True if SKIP_SYNC == "True" else False
+        # true and false are refversed because the skip_sync_choice is the opposite of the sync_choice
+        sync_choice = False if SKIP_SYNC.strip().lower() == "true" else True
         main_multiprocessing(language_choice, sync_choice)
         sys.exit()
 
