@@ -7,9 +7,12 @@ osd_languages = {"English": "en", "Arabic": "ar", "French": "fr"} # {"Language n
 osd_user_agent = TemporaryUserAgent
 
 
+# True or False
 # if you're skipping the interactive menu, the first language in osd_languages will be used
-skip_interactive_menu = False # True or False
-skip_sync = False # this choice is taken into account only if skip_interactive_menu is True
+skip_interactive_menu = True
+
+# skip_sync is taken into account only if skip_interactive_menu is True
+skip_sync = True
 
 
 # Force downloading and storing UTF-8 encoded subtitles files.
