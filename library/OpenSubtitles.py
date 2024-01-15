@@ -3,13 +3,11 @@ import os
 import struct
 import requests
 import json
-import random
 import re
 from pathlib import Path
 import library.clean_subtitles as clean_subtitles
 import library.sync_subtitles as sync_subtitles
 import library.utils as utils
-import spacy
 
 
 class OpenSubtitles:
@@ -372,10 +370,11 @@ class OpenSubtitles:
                     media_name=term,
                     languages=language_choice,
                 )
-                results.extend(temp_results)
-                print(
-                    f"Adding more results by searching for {term}, found {len(temp_results)} results"
-                )
+                if temp_results:
+                    results.extend(temp_results)
+                    print(
+                        f"Adding more results by searching for {term}, found {len(temp_results)} results"
+                    )
         if not results:
             print(f"No subtitles found for {media_name}, or {new_search_terms}")
             return False
@@ -384,6 +383,7 @@ class OpenSubtitles:
         print(f"Found {len(sorted_results)} subtitles for {media_name}")
         selected_sub = self.auto_select_sub(media_name, sorted_results)
         download_link = self.get_download_link(selected_sub)
+        print(f"dowload link: {download_link}")
         print(f">> Downloading {language_choice} subtitles for {media_path}")
         self.print_subtitle_info(selected_sub)
         self.save_subtitle(download_link, subtitle_path)

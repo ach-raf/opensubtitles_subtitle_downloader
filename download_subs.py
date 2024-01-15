@@ -40,6 +40,9 @@ OSD_PASSWORD = CONFIG_INFO["osd_password"].replace('"', "")
 OSD_API_KEY = CONFIG_INFO["osd_api_key"]
 OSD_USER_AGENT = CONFIG_INFO["osd_user_agent"]
 OSD_LANGUAGES = json.loads(CONFIG_INFO["osd_languages"])
+
+SKIP_INTERACTIVE_MENU = CONFIG_INFO["osd_skip_interactive_menu"]
+SKIP_SYNC = CONFIG_INFO["skip_sync"]
 OPT_FORCE_UTF8 = CONFIG_INFO["opt_force_utf8"]
 
 
@@ -112,7 +115,7 @@ def main_multiprocessing(language_choice, sync_choice):
     thread2.join()
 
 
-def main(language_choice):
+def main(language_choice, sync_choice):
     media_path_list = sys.argv[1:]
 
     open_subtitles = OpenSubtitles.OpenSubtitles(
@@ -127,6 +130,12 @@ if __name__ == "__main__":
     # Usage: python download_subs.py <path_to_media_file> <path_to_media_file> # multiple files
     # Usage: python download_subs.py <path_to_media_folder>
     # Usage: python download_subs.py <path_to_media_folder> <path_to_media_folder> # multiple folders
+    if SKIP_INTERACTIVE_MENU == "True":
+        language_choice = list(OSD_LANGUAGES.items())[0][1]
+        sync_choice = True if SKIP_SYNC == "True" else False
+        main_multiprocessing(language_choice, sync_choice)
+        sys.exit()
+
     user_choice = options_menu()
     language_choice = OSD_LANGUAGES[user_choice]
     sync_choice = True if sync_choice_menu() == 2 else False
