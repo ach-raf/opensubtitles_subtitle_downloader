@@ -4,21 +4,30 @@ import struct
 import requests
 import json
 import re
-from pathlib import Path
+
 import library.clean_subtitles as clean_subtitles
 import library.sync_subtitles as sync_subtitles
 import library.utils as utils
 
+from pathlib import Path
+from thefuzz import fuzz
+
+from rich.console import Console
+from rich.table import Table
+from rich import print as rprint
+
 
 class OpenSubtitles:
+
     def __init__(
         self,
         username,
         password,
         api_key,
         user_agent,
-        sync_choice=False,
+        skip_sync_choice=False,
         hearing_impaired=False,
+        auto_select=True,
     ):
         # self.nlp = spacy.load("en_core_web_md")
         self.username = username
@@ -26,8 +35,10 @@ class OpenSubtitles:
         self.api_key = api_key
         self.user_agent = user_agent
         self.token = self.login()
-        self.sync_choice = sync_choice
+        self.sync_choice = skip_sync_choice
         self.hearing_impaired = hearing_impaired
+        self.auto_select = auto_select
+        self.console = Console()
 
     def sort_list_of_dicts_by_key(self, input_list, key_to_sort_by):
         # Create an empty set to store unique 'id' values
@@ -160,8 +171,34 @@ class OpenSubtitles:
             response.raise_for_status()
             return response.json()["data"]
         except requests.exceptions.HTTPError as e:
-            print(f"Error: {response.json()}, {e}")
+            print(f"Error: {response}, {e}")
             return None
+
+    def extract_season_and_episode(self, media_name):
+        regex_pattern = r"S(\d{1,2})E(\d{1,2})|(\d+)x(\d+)| - S(\d{1,2})E(\d{1,2})|S(\d+)\s*-\s*(\d+)"
+        regex = re.compile(regex_pattern)
+
+        match = regex.search(media_name)
+        if match:
+            season = (
+                match.group(1) or match.group(3) or match.group(5) or match.group(7)
+            )
+            episode = (
+                match.group(2) or match.group(4) or match.group(6) or match.group(8)
+            )
+
+            if season and episode:
+                season_number = int(season)
+                episode_number = int(episode)
+                return season_number, episode_number
+            if season:
+                season_number = int(season)
+                return season_number, None
+            if episode:
+                episode_number = int(episode)
+                return None, episode_number
+
+        return None, None
 
     def extract_episode_info(self, input_string):
         # Split the input string by spaces, hyphens, and periods
@@ -273,52 +310,115 @@ class OpenSubtitles:
         else:
             return None
 
-    def jaccard_similarity(self, str1, str2):
-        a = set(str1.split())
-        b = set(str2.split())
-        intersection = len(a.intersection(b))
-        union = len(a) + len(b) - intersection
-        return intersection / union
-
-    def auto_select_sub(self, video_file_name, _subtitles_result_list):
-        # print(f"_subtitles_result_list : {len(_subtitles_result_list)}")
-        _subtitles_selected = None
-        """Automatic subtitles selection, by hash or using filename match"""
-        video_file_parts = (
+    def auto_select_subtitle(self, video_file_name, subtitles_result_list):
+        video_file_parts = re.split(
+            r"[-\s_]",
             video_file_name.replace("-", ".")
             .replace(" ", ".")
             .replace("_", ".")
-            .lower()
-            .split(".")
+            .lower(),
         )
+
         max_score = -1
+        best_subtitle = None
+        best_similarity = 0
 
-        # make the list random to avoid selecting the same sub every time
-        # random.shuffle(_subtitles_result_list)
-        for subtitle in _subtitles_result_list:
+        for subtitle in subtitles_result_list:
             score = 0
-            # extra point if the sub is found by hash
-            if subtitle["attributes"]["moviehash_match"]:
-                return subtitle
-
-            # points for filename mach
             release_name = subtitle["attributes"]["release"]
-            sub_file_parts = (
+            sub_file_parts = re.split(
+                r"[-\s_]",
                 release_name.replace("-", ".")
                 .replace(" ", ".")
                 .replace("_", ".")
-                .lower()
-                .split(".")
+                .lower(),
             )
-            for subPart in sub_file_parts:
-                for filePart in video_file_parts:
-                    if subPart == filePart:
+
+            # Check for moviehash match
+            if subtitle["attributes"]["moviehash_match"]:
+                score += 100
+                best_subtitle = subtitle
+                break
+
+            # Score for filename match
+            for sub_part in sub_file_parts:
+                for file_part in video_file_parts:
+                    if sub_part == file_part:
                         score += 1
+
+            # Compare video filename and subtitle name using fuzzy string matching
+            similarity = fuzz.token_sort_ratio(
+                video_file_name.lower(), release_name.lower()
+            )
+            if similarity == 100:
+                score += 100
+            elif similarity > 90:
+                score += 50
+            elif similarity > 70:
+                score += 35
+            elif similarity > 40:
+                score += 10
+
+            if similarity > best_similarity:
+                best_similarity = similarity
+
+            # Check for season and episode match
+            season_source, episode_source = self.extract_season_and_episode(
+                video_file_name
+            )
+            season_target, episode_target = self.extract_season_and_episode(
+                release_name
+            )
+            if season_source and episode_source and season_target and episode_target:
+                if season_source == season_target and episode_source == episode_target:
+                    score += 80
+
             if score > max_score:
                 max_score = score
-                _subtitles_selected = subtitle
+                best_subtitle = subtitle
 
-        return _subtitles_selected
+        return best_subtitle
+
+    def display_subtitle_options(self, subtitles_list):
+        table = Table(title="Available Subtitles")
+
+        table.add_column("Index", style="cyan", no_wrap=True)
+        table.add_column("Release Name", style="magenta")
+        table.add_column("Language", style="green")
+        table.add_column("Downloads", style="yellow", justify="right")
+        table.add_column("Hash Match", style="blue", justify="center")
+        table.add_column("Machine Translated", style="red", justify="center")
+
+        for idx, sub in enumerate(subtitles_list, start=1):
+            attrs = sub["attributes"]
+            table.add_row(
+                str(idx),
+                attrs["release"],
+                attrs["language"],
+                str(attrs["download_count"]),
+                "[green]o[/]" if attrs.get("moviehash_match", False) else "[red]x[/]",
+                "[green]o[/]" if attrs["machine_translated"] else "[red]x[/]",
+            )
+
+        self.console.print(table)
+
+    def manual_select_subtitle(self, subtitles_list):
+        self.display_subtitle_options(subtitles_list)
+
+        while True:
+            try:
+                choice = int(
+                    self.console.input(
+                        "[yellow]Enter the index of the subtitle you want to download (0 to cancel): [/yellow]"
+                    )
+                )
+                if choice == 0:
+                    return None
+                if 1 <= choice <= len(subtitles_list):
+                    return subtitles_list[choice - 1]
+                self.console.print("[red]Invalid index. Please try again.[/red]")
+            except ValueError:
+                self.console.print("[red]Please enter a valid number.[/red]")
 
     def get_download_link(self, selected_subtitles):
         url = "https://api.opensubtitles.com/api/v1/download"
@@ -356,12 +456,19 @@ class OpenSubtitles:
         hash = self.hashFile(media_path)
         if not media_name:
             media_name = path.stem
-        subtitle_path = Path(path.parent, f"{path.stem}_{language_choice}.srt")
+        rprint(
+            f"[cyan]Searching for subtitles for[/cyan] [yellow]{media_name}[/yellow]"
+        )
+        subtitle_path = Path(path.parent, f"{path.stem}.{language_choice}.srt")
         results = self.search(
             media_hash=hash, media_name=media_name, languages=language_choice
         )
-        print(f"Searcing for subtitles for {media_name}, found {len(results)} results")
-        # add more results, by searching with the new search term
+        if not results:
+            rprint(f"[red]No subtitles found for {media_name}[/red]")
+            return False
+        rprint(f"[green]Found {len(results)} results[/green]")
+
+        # Add more results using alternate names
         new_search_terms = self.get_alternate_names(media_name)
         if new_search_terms:
             for term in new_search_terms:
@@ -372,18 +479,29 @@ class OpenSubtitles:
                 )
                 if temp_results:
                     results.extend(temp_results)
-                    print(
-                        f"Adding more results by searching for {term}, found {len(temp_results)} results"
+                    rprint(
+                        f"[blue]Adding more results by searching for[/blue] [yellow]{term}[/yellow], [green]found {len(temp_results)} results[/green]"
                     )
+
         if not results:
-            print(f"No subtitles found for {media_name}, or {new_search_terms}")
+            rprint(f"[red]No subtitles found for {media_name}[/red]")
             return False
 
         sorted_results = self.sort_list_of_dicts_by_key(results, "download_count")
-        print(f"Found {len(sorted_results)} subtitles for {media_name}")
-        selected_sub = self.auto_select_sub(media_name, sorted_results)
+
+        if self.auto_select:
+            selected_sub = self.auto_select_subtitle(media_name, sorted_results)
+        else:
+            selected_sub = self.manual_select_subtitle(sorted_results)
+
+        if selected_sub is None:
+            rprint("[yellow]Subtitle download cancelled.[/yellow]")
+            return False
+
         download_link = self.get_download_link(selected_sub)
-        print(f">> Downloading {language_choice} subtitles for {media_path}")
+        rprint(
+            f"[green]>> Downloading {language_choice} subtitles for {media_path}[/green]"
+        )
         self.print_subtitle_info(selected_sub)
         self.save_subtitle(download_link, subtitle_path)
         self.clean_subtitles(subtitle_path)
@@ -425,29 +543,29 @@ class OpenSubtitles:
         sync_subtitles.sync_subs_audio(media_path, subtitle_path)
 
     def print_subtitle_info(self, sub):
-        movie_name = sub["attributes"]["feature_details"]["movie_name"]
-        sub_id = sub["id"]
-        file_id = sub["attributes"]["files"][0]["file_id"]
-        language = sub["attributes"]["language"]
-        release = sub["attributes"]["release"]
-        download_count = sub["attributes"]["download_count"]
-        url = sub["attributes"]["url"]
-        ai_translated = sub["attributes"]["ai_translated"]
-        machine_translated = sub["attributes"]["machine_translated"]
-        media_hash = None
-        try:
-            media_hash = sub["attributes"]["moviehash_match"]
-        except KeyError:
-            pass
+        attrs = sub["attributes"]
+        movie_name = attrs["feature_details"]["movie_name"]
 
-        print(f"Media Name: {movie_name}, sub_id: {sub_id}")
-        print(f"file_id {file_id}, hash: {media_hash}")
-        print(f"- Language: {language}")
-        print(f"- Release: {release}")
-        print(f"- Downloads: {download_count}")
-        print(f"- AI Translated: {ai_translated}")
-        print(f"- machine_translated: {machine_translated}")
-        print(f"- URL: {url}")
+        info_table = Table(title=f"Selected Subtitle Information", show_header=False)
+        info_table.add_column("Property", style="cyan")
+        info_table.add_column("Value", style="yellow")
+
+        info_table.add_row("Movie Name", movie_name)
+        info_table.add_row("Subtitle ID", sub["id"])
+        info_table.add_row("File ID", str(attrs["files"][0]["file_id"]))
+        info_table.add_row("Language", attrs["language"])
+        info_table.add_row("Release", attrs["release"])
+        info_table.add_row("Downloads", str(attrs["download_count"]))
+        info_table.add_row("AI Translated", "Yes" if attrs["ai_translated"] else "No")
+        info_table.add_row(
+            "Machine Translated", "Yes" if attrs["machine_translated"] else "No"
+        )
+        info_table.add_row(
+            "Hash Match", "Yes" if attrs.get("moviehash_match", False) else "No"
+        )
+        info_table.add_row("URL", attrs["url"])
+
+        self.console.print(info_table)
 
 
 if __name__ == "__main__":

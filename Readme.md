@@ -1,14 +1,22 @@
 # Opensubtitles.com subtitle downloader
 
-This is a Python script to download subtitles from OpenSubtitles.com and process them.
+This is a Python script to download subtitles from OpenSubtitles.com and SubDL.com.
 
 It can:
 
-- Download subtitles
+- Download subtitles from multiple sources (OpenSubtitles.com and SubDL.com)
 - Clean subtitles of ads
 - Sync subtitles to audio (using [ffsubsync](https://github.com/smacke/ffsubsync))
 
-You can get an API key by registering at https://www.opensubtitles.com/en/consumers .
+## Getting API Keys
+
+1. For OpenSubtitles.com:
+
+   - Register at https://www.opensubtitles.com/en/consumers to get your API key
+
+2. For SubDL.com:
+   - Create an account at https://subdl.com
+   - Find your API key under Account Settings
 
 ## Installation
 
@@ -28,14 +36,32 @@ git clone https://github.com/ach-raf/opensubtitles_subtitle_downloader.git
 pip3 install -r requirements.txt
 ```
 
-4. Add your OpenSubtitles.com credentials to `config.ini`
+## Configuration
 
-```ini
-[SETTINGS]
-osd_username = YOUR_USERNAME
-osd_password = YOUR_PASSWORD
-osd_api_key = YOUR_API_KEY
-osd_user_agent = YOUR_USER_AGENT
+Rename `config.yaml.sample` to `config.yaml` and add your credentials:
+
+```yaml
+opensubtitles:
+  username: YOUR_USERNAME
+  password: YOUR_PASSWORD
+  api_key: YOUR_API_KEY
+  user_agent: YOUR_USER_AGENT
+
+subdl:
+  api_key: YOUR_SUBDL_API_KEY
+```
+
+You can set your preferred subtitle backend in the config:
+
+The script will either:
+
+Use your preferred backend
+Ask which service to use
+Automatically choose between them (when set to "auto")
+
+```yaml
+general:
+  preferred_backend: ask # Options: opensubtitles, subdl, auto, ask
 ```
 
 ## Usage

@@ -1,3 +1,5 @@
+# ==== .ini file is DEPRECATED, the YAML file is used instead ====
+
 # ==== OpenSubtitles.com server settings =======================================
 [SETTINGS]
 osd_username = USERNAME

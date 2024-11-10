@@ -1,0 +1,45 @@
+general:
+  preferred_backend: ask # Options: opensubtitles, subdl, auto, ask, auto is not yet implemented in a meaningful way
+  skip_interactive_menu: false # Options: true, false
+  skip_sync: false
+  auto_selection: false
+  opt_force_utf8: true
+
+opensubtitles:
+  username: opensubtitles_username
+  password: opensubtitles_password
+  api_key: opensubtitles_api_key
+  user_agent: opensubtitles_user_agent
+  languages:
+    English: en
+    Arabic: ar
+    French: fr
+    Japanese: ja
+
+subdl:
+  api_key: subdl_api_key
+  languages:
+    English: en
+    Arabic: ar
+    French: fr
+    Japanese: ja
+
+cleaning_subtitles:
+  supported_media:
+    - srt
+    - ass
+    - ssa
+    - sub
+    - smi
+    - vtt
+    - ttml
+    - dfxp
+    - mpl2
+    - lrc
+    - sbv
+    - rt
+    - txt
+  ads:
+    separator: ","
+    file_path: ""
+    #file_path: "C:\\clean_subtitles\\ads.txt" example

@@ -2,3 +2,6 @@ requests
 black
 ffmpeg
 ffsubsync
+thefuzz
+pyyaml
+rich

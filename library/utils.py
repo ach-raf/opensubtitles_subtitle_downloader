@@ -4,7 +4,6 @@ import time
 
 # ================================ Paths =============================
 CURRENT_DIR_PATH = os.path.dirname(os.path.realpath(__file__))
-INFO_FILE_PATH = os.path.join(CURRENT_DIR_PATH, "config.ini")
 TOKEN_STORAGE_FILE = os.path.join(CURRENT_DIR_PATH, "token.pkl")
 # ====================================================================
 
@@ -34,7 +33,6 @@ def read_token():
 
     # If the file doesn't exist or the token is too old, return False
     return False
-
 
 
 if __name__ == "__main__":

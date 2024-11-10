@@ -55,7 +55,10 @@ def clean_ads_regex(_subtitle_file_path, _ads_to_remove):
 
     join_ads_regex = "|".join(map(re.escape, regex_list)).replace("\\", "")
     _file_content = re.sub(
-        pattern=join_ads_regex, repl="", string=_content, flags=re.MULTILINE
+        pattern=join_ads_regex,
+        repl="",
+        string=_content,
+        flags=re.MULTILINE | re.IGNORECASE,
     )
 
     # result = re.findall(join_ads_regex, _text, re.MULTILINE)

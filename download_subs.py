@@ -1,128 +1,212 @@
 import os
 import sys
-import configparser
+import yaml
+from enum import Enum
+from typing import List, Dict, Optional, Tuple
+from rich.console import Console
+from rich.table import Table
+from rich import print as rprint
 import library.OpenSubtitles as OpenSubtitles
-import library.sync_subtitles as sync_subtitles
-import json
-import threading
-import multiprocessing
+from library.SubDL import SubDL
+
+console = Console()
 
 
-def read_config_file(file_path):
-    """function to read informations from an info.ini file and return a list of info.
-
-    Args:
-        file_path ([str]): [path to read regex from]
-
-    Returns:
-        [dict]: [dict of credentials]
-    """
-    config = configparser.ConfigParser()
-    config.read(file_path)
-    credentials = {}
-    for section in config.sections():
-        for key in config[section]:
-            # print(f'{key} = {config[section][key]}')
-            credentials[key] = config[section][key]
-    return credentials
+class SubtitleBackend(Enum):
+    OPENSUBTITLES = "opensubtitles"
+    SUBDL = "subdl"
+    AUTO = "auto"
+    ASK = "ask"
 
 
-# ================================ Paths =============================
-CURRENT_DIR_PATH = os.path.dirname(os.path.realpath(__file__))
-INFO_FILE_PATH = os.path.join(CURRENT_DIR_PATH, "config.ini")
-# ====================================================================
+class SubtitleDownloader:
+    def __init__(self, config_path: str):
+        self.config = self._read_config_file(config_path)
+        self.opensubtitles_client = None
+        self.subdl_client = None
+        self.console = Console()
 
-# =============== Reading from config.ini ==============================
-CONFIG_INFO = read_config_file(INFO_FILE_PATH)
+    def _read_config_file(self, file_path: str) -> Dict:
+        with open(file_path, "r") as file:
+            return yaml.safe_load(file)
 
-OSD_USERNAME = CONFIG_INFO["osd_username"]
-OSD_PASSWORD = CONFIG_INFO["osd_password"].replace('"', "")
-OSD_API_KEY = CONFIG_INFO["osd_api_key"]
-OSD_USER_AGENT = CONFIG_INFO["osd_user_agent"]
-OSD_LANGUAGES = json.loads(CONFIG_INFO["osd_languages"])
+    def _init_opensubtitles(self):
+        if self.opensubtitles_client is None:
+            self.opensubtitles_client = OpenSubtitles.OpenSubtitles(
+                self.config["opensubtitles"]["username"],
+                self.config["opensubtitles"]["password"],
+                self.config["opensubtitles"]["api_key"],
+                self.config["opensubtitles"]["user_agent"],
+                skip_sync_choice=self.config["general"].get("skip_sync", False),
+                auto_select=self.config["general"].get("auto_selection", False),
+            )
 
-SKIP_INTERACTIVE_MENU = CONFIG_INFO["skip_interactive_menu"]
-SKIP_SYNC = CONFIG_INFO["skip_sync"]
-OPT_FORCE_UTF8 = CONFIG_INFO["opt_force_utf8"]
+    def _init_subdl(self):
+        if self.subdl_client is None:
+            self.subdl_client = SubDL(
+                self.config["subdl"]["api_key"],
+                sync_choice=self.config["general"].get("skip_sync", False),
+                hearing_impaired=False,
+                auto_select=self.config["general"].get("auto_selection", False),
+            )
+
+    def _choose_backend(
+        self, media_paths: List[str], preferred_backend: SubtitleBackend
+    ) -> SubtitleBackend:
+        if preferred_backend == SubtitleBackend.ASK:
+            return self._ask_backend()
+        elif preferred_backend != SubtitleBackend.AUTO:
+            return preferred_backend
+
+        # Add logic here to choose the best backend based on various factors
+        # For example:
+        # 1. Check previous success rates
+        return (
+            SubtitleBackend.OPENSUBTITLES
+            if len(media_paths) % 2 == 0
+            else SubtitleBackend.SUBDL
+        )
+
+    def _ask_backend(self) -> SubtitleBackend:
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("#", style="cyan", width=4)
+        table.add_column("Service", style="green")
+        table.add_column("Description", style="yellow")
+
+        table.add_row(
+            "1", "OpenSubtitles", "Extensive database, good for movies and TV shows"
+        )
+        table.add_row(
+            "2", "SubDL", "Alternative source, sometimes better for specific content"
+        )
+        table.add_row("3", "Auto", "Let the program decide based on various factors")
+
+        self.console.print(table)
+
+        while True:
+            choice = self.console.input("[bold cyan]Select service (1-3):[/] ")
+            try:
+                choice_num = int(choice)
+                if choice_num == 1:
+                    return SubtitleBackend.OPENSUBTITLES
+                elif choice_num == 2:
+                    return SubtitleBackend.SUBDL
+                elif choice_num == 3:
+                    return SubtitleBackend.AUTO
+                else:
+                    self.console.print(
+                        "[bold red]Please enter a number between 1 and 3[/]"
+                    )
+            except ValueError:
+                self.console.print("[bold red]Please enter a valid number[/]")
+
+    def download_subtitles(
+        self, media_paths: List[str], language: str, backend: SubtitleBackend
+    ) -> None:
+        chosen_backend = self._choose_backend(media_paths, backend)
+
+        self.console.print(
+            f"[bold green]Downloading subtitles using {chosen_backend.value}..."
+        )
+
+        if chosen_backend == SubtitleBackend.OPENSUBTITLES:
+            self._init_opensubtitles()
+            self.console.print(
+                f"[bold blue]Using OpenSubtitles backend for {len(media_paths)} files[/]"
+            )
+            self.opensubtitles_client.download_subtitles(media_paths, language)
+        else:
+            self._init_subdl()
+            self.console.print(
+                f"[bold blue]Using SubDL backend for {len(media_paths)} files[/]"
+            )
+            self.subdl_client.process_media_list(
+                media_paths,
+                language,
+            )
+
+    def _show_language_menu(self, languages: Dict[str, str]) -> str:
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("#", style="cyan", width=4)
+        table.add_column("Language", style="green")
+        table.add_column("Code", style="yellow")
+
+        # Updated to handle languages where the key is the full name and value is the code
+        for i, (lang, code) in enumerate(languages.items(), 1):
+            table.add_row(str(i), lang, code)
+
+        self.console.print(table)
+
+        while True:
+            choice = self.console.input("[bold cyan]Select language number:[/] ")
+            try:
+                choice_num = int(choice)
+                if 1 <= choice_num <= len(languages):
+                    # Return the language code (value) instead of the full name (key)
+                    return list(languages.values())[choice_num - 1]
+                else:
+                    self.console.print("[bold red]Please enter a valid number[/]")
+            except ValueError:
+                self.console.print("[bold red]Please enter a valid number[/]")
+
+    def interactive_menu(self) -> Tuple[SubtitleBackend, str]:
+        backend = self._get_backend_from_config()
+
+        if backend == SubtitleBackend.OPENSUBTITLES:
+            languages = self.config["opensubtitles"]["languages"]
+        elif backend == SubtitleBackend.SUBDL:
+            languages = self.config["subdl"]["languages"]
+        else:  # For AUTO or ASK, use OpenSubtitles languages as default
+            languages = self.config["opensubtitles"]["languages"]
+
+        language = self._show_language_menu(languages)
+        return backend, language
+
+    def _get_backend_from_config(self) -> SubtitleBackend:
+        backend_str = self.config["general"].get("preferred_backend", "ask").lower()
+        try:
+            return SubtitleBackend(backend_str)
+        except ValueError:
+            self.console.print(
+                f"[bold red]Invalid backend in config: {backend_str}. Using 'ask' instead.[/]"
+            )
+            return SubtitleBackend.ASK
 
 
-# ====================================================================
-def print_menu():  # much graphic, very handsome
-    global OSD_LANGUAGES
-    language_number = 0
-    choice_conversion = []
-    print(30 * "-", "Select language for your subtitles", 30 * "-")
-    for language_name in OSD_LANGUAGES:
-        choice_conversion.append(language_name)
-        print(f"{language_number}. {language_name}")
-        language_number += 1
+def main():
+    CURRENT_DIR_PATH = os.path.dirname(os.path.realpath(__file__))
+    CONFIG_FILE_PATH = os.path.join(CURRENT_DIR_PATH, "config.yaml")
 
-    print(f"{language_number}. Exit")
-    print(66 * "-")
-    return choice_conversion
+    try:
+        downloader = SubtitleDownloader(CONFIG_FILE_PATH)
+    except FileNotFoundError:
+        console = Console()
+        console.print(
+            "[bold red]Config file not found. Please ensure config.yaml exists.[/]"
+        )
+        sys.exit(1)
+    except yaml.YAMLError as e:
+        console = Console()
+        console.print(f"[bold red]Error reading config file: {e}[/]")
+        sys.exit(1)
 
+    media_paths = sys.argv[1:]
+    if not media_paths:
+        console = Console()
+        console.print("[bold red]No media paths provided. Exiting...[/]")
+        sys.exit(1)
 
-def options_menu():
-    choice_conversion = print_menu()
-    user_choice = int(input("Subtitle language: "))
-    # because the list (folder choice) in the printed menu is dynamic the showing order is the same as the index of the list
-    if choice_conversion[user_choice]:
-        print(f"Downloading subtitles in {choice_conversion[user_choice]}")
-        return choice_conversion[user_choice]
+    if downloader.config["general"].get("skip_interactive_menu", False):
+        backend = downloader._get_backend_from_config()
+        if backend == SubtitleBackend.OPENSUBTITLES:
+            # get the first language code (value) instead of key
+            language = list(downloader.config["opensubtitles"]["languages"].values())[0]
+        else:
+            language = list(downloader.config["subdl"]["languages"].values())[0]
     else:
-        print("Exiting...")
-        sys.exit()
+        backend, language = downloader.interactive_menu()
 
-
-def sync_choice_menu():
-    print(30 * "-", "Sync subtitle to video", 30 * "-")
-    print("1. No")
-    print("2. Yes")
-    print("3. Exit")
-    print(66 * "-")
-    user_choice = int(input("Sync choice: "))
-    return user_choice
-
-
-def main_multiprocessing(language_choice, sync_choice):
-    media_path_list = sys.argv[1:]
-
-    # Split the media_path_list into two parts
-    split_index = len(media_path_list) // 2
-    first_half = media_path_list[:split_index]
-    second_half = media_path_list[split_index:]
-
-    open_subtitles = OpenSubtitles.OpenSubtitles(
-        OSD_USERNAME, OSD_PASSWORD, OSD_API_KEY, OSD_USER_AGENT, sync_choice=sync_choice
-    )
-
-    # Create two threads to run in parallel
-    thread1 = multiprocessing.Process(
-        target=open_subtitles.download_subtitles,
-        args=(first_half, language_choice),
-    )
-    thread2 = multiprocessing.Process(
-        target=open_subtitles.download_subtitles,
-        args=(second_half, language_choice),
-    )
-
-    # Start the threads
-    thread1.start()
-    thread2.start()
-
-    # Wait for both threads to finish
-    thread1.join()
-    thread2.join()
-
-
-def main(language_choice, sync_choice):
-    media_path_list = sys.argv[1:]
-
-    open_subtitles = OpenSubtitles.OpenSubtitles(
-        OSD_USERNAME, OSD_PASSWORD, OSD_API_KEY, OSD_USER_AGENT, sync_choice=sync_choice
-    )
-
-    open_subtitles.download_subtitles(media_path_list, language_choice)
+    downloader.download_subtitles(media_paths, language, backend)
 
 
 if __name__ == "__main__":
@@ -130,14 +214,4 @@ if __name__ == "__main__":
     # Usage: python download_subs.py <path_to_media_file> <path_to_media_file> # multiple files
     # Usage: python download_subs.py <path_to_media_folder>
     # Usage: python download_subs.py <path_to_media_folder> <path_to_media_folder> # multiple folders
-    if SKIP_INTERACTIVE_MENU.strip().lower() == "true":
-        language_choice = list(OSD_LANGUAGES.items())[0][1]
-        # true and false are refversed because the skip_sync_choice is the opposite of the sync_choice
-        sync_choice = False if SKIP_SYNC.strip().lower() == "true" else True
-        main_multiprocessing(language_choice, sync_choice)
-        sys.exit()
-
-    user_choice = options_menu()
-    language_choice = OSD_LANGUAGES[user_choice]
-    sync_choice = True if sync_choice_menu() == 2 else False
-    main_multiprocessing(language_choice, sync_choice)
+    main()
