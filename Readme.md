@@ -18,6 +18,10 @@ It can:
    - Create an account at https://subdl.com
    - Find your API key under Account Settings
 
+## Screenshots
+
+![Example](screenshots/subtitle_downloader.png)
+
 ## Installation
 
 ### Linux, Windows
