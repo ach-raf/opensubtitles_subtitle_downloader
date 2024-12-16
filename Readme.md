@@ -42,7 +42,20 @@ pip3 install -r requirements.txt
 
 ## Configuration
 
-Rename `config.yaml.sample` to `config.yaml` and add your credentials:
+Rename `config.yaml.sample` to `config.yaml` and configure the following sections:
+
+### General Settings
+
+```yaml
+general:
+  preferred_backend: subdl # Options: opensubtitles, subdl, auto, ask
+  skip_interactive_menu: false # Options: true, false
+  sync_audio_to_subs: true # Options: true, false, ask
+  auto_selection: false # Options: true, false
+  opt_force_utf8: true # Options: true, false
+```
+
+### OpenSubtitles Configuration
 
 ```yaml
 opensubtitles:
@@ -50,22 +63,31 @@ opensubtitles:
   password: YOUR_PASSWORD
   api_key: YOUR_API_KEY
   user_agent: YOUR_USER_AGENT
-
-subdl:
-  api_key: YOUR_SUBDL_API_KEY
+  languages:
+    English: en
+    Arabic: ar
+    French: fr
+    Japanese: ja
 ```
 
-You can set your preferred subtitle backend in the config:
-
-The script will either:
-
-Use your preferred backend
-Ask which service to use
-Automatically choose between them (when set to "auto")
+### SubDL Configuration
 
 ```yaml
-general:
-  preferred_backend: ask # Options: opensubtitles, subdl, auto, ask
+subdl:
+  api_key: YOUR_SUBDL_API_KEY
+  languages:
+    English: en
+    Arabic: ar
+    French: fr
+    Japanese: ja
+```
+
+### Subtitle Cleaning Configuration
+
+```yaml
+ads:
+  separator: ","
+  file_path: "" # Example: "C:\\clean_subtitles\\ads.txt"
 ```
 
 ## Usage

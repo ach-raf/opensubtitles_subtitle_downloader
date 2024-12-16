@@ -8,6 +8,7 @@ from rich.table import Table
 from rich import print as rprint
 import library.OpenSubtitles as OpenSubtitles
 from library.SubDL import SubDL
+import requests
 
 console = Console()
 
@@ -27,45 +28,86 @@ class SubtitleDownloader:
         self.console = Console()
 
     def _read_config_file(self, file_path: str) -> Dict:
-        with open(file_path, "r") as file:
-            return yaml.safe_load(file)
+        try:
+            with open(file_path, "r") as file:
+                return yaml.safe_load(file)
+        except FileNotFoundError:
+            console.print(f"[bold red]Error: Config file not found at {file_path}[/]")
+            sys.exit(1)
+        except yaml.YAMLError as e:
+            console.print(f"[bold red]Error: Invalid YAML in config file: {e}[/]")
+            sys.exit(1)
 
     def _init_opensubtitles(self):
         if self.opensubtitles_client is None:
-            self.opensubtitles_client = OpenSubtitles.OpenSubtitles(
-                self.config["opensubtitles"]["username"],
-                self.config["opensubtitles"]["password"],
-                self.config["opensubtitles"]["api_key"],
-                self.config["opensubtitles"]["user_agent"],
-                skip_sync_choice=self.config["general"].get("skip_sync", False),
-                auto_select=self.config["general"].get("auto_selection", False),
-            )
+            try:
+                self.opensubtitles_client = OpenSubtitles.OpenSubtitles(
+                    self.config["opensubtitles"]["username"],
+                    self.config["opensubtitles"]["password"],
+                    self.config["opensubtitles"]["api_key"],
+                    self.config["opensubtitles"]["user_agent"],
+                    sync_audio_to_subs=self.config["general"].get(
+                        "sync_audio_to_subs", False
+                    ),
+                    auto_select=self.config["general"].get("auto_selection", False),
+                )
+            except KeyError as e:
+                console.print(
+                    f"[bold red]Error: Missing key in opensubtitles config: {e}[/]"
+                )
+                sys.exit(1)
 
     def _init_subdl(self):
         if self.subdl_client is None:
-            self.subdl_client = SubDL(
-                self.config["subdl"]["api_key"],
-                sync_choice=self.config["general"].get("skip_sync", False),
-                hearing_impaired=False,
-                auto_select=self.config["general"].get("auto_selection", False),
-            )
+            try:
+                self.subdl_client = SubDL(
+                    self.config["subdl"]["api_key"],
+                    sync_audio_to_subs=self.config["general"].get(
+                        "sync_audio_to_subs", False
+                    ),
+                    hearing_impaired=False,
+                    auto_select=self.config["general"].get("auto_selection", False),
+                )
+            except KeyError as e:
+                console.print(f"[bold red]Error: Missing key in subdl config: {e}[/]")
+                sys.exit(1)
 
     def _choose_backend(
         self, media_paths: List[str], preferred_backend: SubtitleBackend
     ) -> SubtitleBackend:
         if preferred_backend == SubtitleBackend.ASK:
             return self._ask_backend()
-        elif preferred_backend != SubtitleBackend.AUTO:
+        elif preferred_backend == SubtitleBackend.AUTO:
+            # Check API availability
+            opensubtitles_available = self._check_api_availability(
+                "https://api.opensubtitles.com/api/v1/login"
+            )
+            subdl_available = self._check_api_availability(
+                "https://api.subdl.com/api/v1/subtitles"
+            )
+
+            if opensubtitles_available and subdl_available:
+                # Implement more sophisticated logic here if both are available
+                return SubtitleBackend.OPENSUBTITLES
+            elif opensubtitles_available:
+                return SubtitleBackend.OPENSUBTITLES
+            elif subdl_available:
+                return SubtitleBackend.SUBDL
+            else:
+                console.print(
+                    "[bold red]Error: Both OpenSubtitles and SubDL APIs are unavailable.[/]"
+                )
+                return None  # Indicate failure
+
+        else:
             return preferred_backend
 
-        # Add logic here to choose the best backend based on various factors
-        # For example:
-        # 1. Check previous success rates
-        return (
-            SubtitleBackend.OPENSUBTITLES
-            if len(media_paths) % 2 == 0
-            else SubtitleBackend.SUBDL
-        )
+    def _check_api_availability(self, url: str) -> bool:
+        try:
+            response = requests.get(url, timeout=5)
+            return response.status_code == 200
+        except requests.exceptions.RequestException:
+            return False
 
     def _ask_backend(self) -> SubtitleBackend:
         table = Table(show_header=True, header_style="bold magenta")
@@ -87,12 +129,12 @@ class SubtitleDownloader:
             choice = self.console.input("[bold cyan]Select service (1-3):[/] ")
             try:
                 choice_num = int(choice)
-                if choice_num == 1:
-                    return SubtitleBackend.OPENSUBTITLES
-                elif choice_num == 2:
-                    return SubtitleBackend.SUBDL
-                elif choice_num == 3:
-                    return SubtitleBackend.AUTO
+                if 1 <= choice_num <= 3:
+                    return [
+                        SubtitleBackend.OPENSUBTITLES,
+                        SubtitleBackend.SUBDL,
+                        SubtitleBackend.AUTO,
+                    ][choice_num - 1]
                 else:
                     self.console.print(
                         "[bold red]Please enter a number between 1 and 3[/]"
@@ -104,6 +146,8 @@ class SubtitleDownloader:
         self, media_paths: List[str], language: str, backend: SubtitleBackend
     ) -> None:
         chosen_backend = self._choose_backend(media_paths, backend)
+        if chosen_backend is None:
+            return
 
         self.console.print(
             f"[bold green]Downloading subtitles using {chosen_backend.value}..."
@@ -114,24 +158,34 @@ class SubtitleDownloader:
             self.console.print(
                 f"[bold blue]Using OpenSubtitles backend for {len(media_paths)} files[/]"
             )
-            self.opensubtitles_client.download_subtitles(media_paths, language)
-        else:
+            if self.opensubtitles_client:
+                self.opensubtitles_client.process_media_list(media_paths, language)
+            else:
+                console.print(
+                    "[bold red]OpenSubtitles client initialization failed.[/]"
+                )
+        elif chosen_backend == SubtitleBackend.SUBDL:
             self._init_subdl()
             self.console.print(
                 f"[bold blue]Using SubDL backend for {len(media_paths)} files[/]"
             )
-            self.subdl_client.process_media_list(
-                media_paths,
-                language,
-            )
+            if self.subdl_client:
+                self.subdl_client.process_media_list(media_paths, language)
+            else:
+                console.print("[bold red]SubDL client initialization failed.[/]")
+        else:
+            console.print("[bold red]Invalid backend selected.[/]")
 
     def _show_language_menu(self, languages: Dict[str, str]) -> str:
+        if not languages:
+            console.print("[bold red]Error: No languages defined in config.[/]")
+            return ""
+
         table = Table(show_header=True, header_style="bold magenta")
         table.add_column("#", style="cyan", width=4)
         table.add_column("Language", style="green")
         table.add_column("Code", style="yellow")
 
-        # Updated to handle languages where the key is the full name and value is the code
         for i, (lang, code) in enumerate(languages.items(), 1):
             table.add_row(str(i), lang, code)
 
@@ -142,7 +196,6 @@ class SubtitleDownloader:
             try:
                 choice_num = int(choice)
                 if 1 <= choice_num <= len(languages):
-                    # Return the language code (value) instead of the full name (key)
                     return list(languages.values())[choice_num - 1]
                 else:
                     self.console.print("[bold red]Please enter a valid number[/]")
@@ -153,22 +206,24 @@ class SubtitleDownloader:
         backend = self._get_backend_from_config()
 
         if backend == SubtitleBackend.OPENSUBTITLES:
-            languages = self.config["opensubtitles"]["languages"]
+            languages = self.config.get("opensubtitles", {}).get("languages", {})
         elif backend == SubtitleBackend.SUBDL:
-            languages = self.config["subdl"]["languages"]
-        else:  # For AUTO or ASK, use OpenSubtitles languages as default
-            languages = self.config["opensubtitles"]["languages"]
+            languages = self.config.get("subdl", {}).get("languages", {})
+        else:
+            languages = self.config.get("opensubtitles", {}).get("languages", {})
 
         language = self._show_language_menu(languages)
         return backend, language
 
     def _get_backend_from_config(self) -> SubtitleBackend:
-        backend_str = self.config["general"].get("preferred_backend", "ask").lower()
+        backend_str = (
+            self.config.get("general", {}).get("preferred_backend", "ask").lower()
+        )
         try:
             return SubtitleBackend(backend_str)
         except ValueError:
-            self.console.print(
-                f"[bold red]Invalid backend in config: {backend_str}. Using 'ask' instead.[/]"
+            console.print(
+                f"[bold red]Warning: Invalid backend in config: {backend_str}. Using 'ask' instead.[/]"
             )
             return SubtitleBackend.ASK
 
@@ -179,39 +234,44 @@ def main():
 
     try:
         downloader = SubtitleDownloader(CONFIG_FILE_PATH)
-    except FileNotFoundError:
-        console = Console()
-        console.print(
-            "[bold red]Config file not found. Please ensure config.yaml exists.[/]"
-        )
-        sys.exit(1)
-    except yaml.YAMLError as e:
-        console = Console()
-        console.print(f"[bold red]Error reading config file: {e}[/]")
+    except SystemExit:
         sys.exit(1)
 
     media_paths = sys.argv[1:]
     if not media_paths:
-        console = Console()
-        console.print("[bold red]No media paths provided. Exiting...[/]")
+        console.print("[bold red]Error: No media paths provided. Exiting...[/]")
         sys.exit(1)
 
-    if downloader.config["general"].get("skip_interactive_menu", False):
+    if downloader.config.get("general", {}).get("skip_interactive_menu", False):
         backend = downloader._get_backend_from_config()
         if backend == SubtitleBackend.OPENSUBTITLES:
-            # get the first language code (value) instead of key
-            language = list(downloader.config["opensubtitles"]["languages"].values())[0]
+            language = (
+                list(
+                    downloader.config.get("opensubtitles", {})
+                    .get("languages", {})
+                    .values()
+                )[0]
+                if downloader.config.get("opensubtitles", {}).get("languages")
+                else ""
+            )
         else:
-            language = list(downloader.config["subdl"]["languages"].values())[0]
+            language = (
+                list(downloader.config.get("subdl", {}).get("languages", {}).values())[
+                    0
+                ]
+                if downloader.config.get("subdl", {}).get("languages")
+                else ""
+            )
+        if not language:
+            console.print("[bold red]Error: No languages defined in config.[/]")
+            sys.exit(1)
     else:
         backend, language = downloader.interactive_menu()
+        if not language:
+            sys.exit(1)
 
     downloader.download_subtitles(media_paths, language, backend)
 
 
 if __name__ == "__main__":
-    # Usage: python download_subs.py <path_to_media_file>
-    # Usage: python download_subs.py <path_to_media_file> <path_to_media_file> # multiple files
-    # Usage: python download_subs.py <path_to_media_folder>
-    # Usage: python download_subs.py <path_to_media_folder> <path_to_media_folder> # multiple folders
     main()
