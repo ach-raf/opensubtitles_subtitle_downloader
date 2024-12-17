@@ -364,9 +364,7 @@ class SubDL:
             attrs = sub["attributes"]
             # movie_name = attrs["feature_details"]["movie_name"]
 
-            info_table = Table(
-                title="Selected Subtitle Information", show_header=False
-            )
+            info_table = Table(title="Selected Subtitle Information", show_header=False)
             info_table.add_column("Property", style="cyan")
             info_table.add_column("Value", style="yellow")
 
