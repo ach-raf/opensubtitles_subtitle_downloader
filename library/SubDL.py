@@ -37,6 +37,17 @@ class SubDL:
         self.subtitle_utils = SubtitleUtils()
         self.standardize_subtitle_objects = None
 
+    def clean_filename(self, filename):
+        # Remove multiple consecutive dashes and spaces
+        cleaned = re.sub(r"-+\s*-+", " ", filename)
+        # Remove multiple dots
+        cleaned = re.sub(r"\.+", " ", cleaned)
+        # Remove quality tags and other common patterns in brackets
+        cleaned = re.sub(r"\[(.*?)\]", "", cleaned)
+        # Remove multiple spaces
+        cleaned = re.sub(r"\s+", " ", cleaned)
+        return cleaned.strip()
+
     def search(
         self,
         film_name="",
@@ -230,6 +241,9 @@ class SubDL:
             hash = self.subtitle_utils.hashFile(path)
             if not media_name:
                 media_name = path.stem
+
+            # Clean the media name for better search results
+            clean_media_name = self.clean_filename(media_name)
             rprint(
                 f"[cyan]Searching for subtitles for[/cyan] [yellow]{media_name}[/yellow]"
             )
@@ -237,21 +251,21 @@ class SubDL:
 
             # Initial search by filename
             search_results = self.search(
-                file_name=media_name, languages=language_choice
+                file_name=clean_media_name, languages=language_choice
             )
             subtitles_list = search_results.subtitles
             if not subtitles_list:
-                rprint(f"[red]No subtitles found for {media_name}[/red]")
+                rprint(f"[red]No subtitles found for {clean_media_name}[/red]")
             else:
                 rprint(f"[green]Found {len(subtitles_list)} results[/green]")
 
-            # parse series name and search for subtitles by series name alone series name exapmle: "The Flash 2014", "Dune - Prophecy (2024) - S01E01 - - The Hidden Hand [AMZN WEBDL-1080p][8bit][h264][EAC3 5.1]-playWEB"
+            # parse series name and search for subtitles by series name alone
             series_name = re.search(
-                r"(.+?)(?:\s-\sS\d{2}E\d{2}|\s-\s\d{4})", media_name
+                r"(.+?)(?:\s-\sS\d{2}E\d{2}|\s-\s\d{4})", clean_media_name
             )
 
             if series_name:
-                series_name = series_name.group(1)
+                series_name = series_name.group(1).strip()
                 rprint(
                     f"[cyan]Searching for subtitles for series[/cyan] [yellow]{series_name}[/yellow]"
                 )
@@ -263,6 +277,23 @@ class SubDL:
                     rprint(f"[red]No subtitles found for {series_name}[/red]")
                 else:
                     rprint(f"[green]Found {len(subtitles_list)} results[/green]")
+
+                # Check if series name contains Mr. or Ms. and search without them
+                if re.search(r"(?i)mr\.|ms\.", series_name):
+                    clean_series_name = re.sub(
+                        r"(?i)(?:mr\.|ms\.)\s*", "", series_name
+                    ).strip()
+                    rprint(
+                        f"[cyan]Searching without title prefix for[/cyan] [yellow]{clean_series_name}[/yellow]"
+                    )
+                    clean_name_search_results = self.search(
+                        film_name=clean_series_name, languages=language_choice
+                    )
+                    if clean_name_search_results.subtitles:
+                        subtitles_list.extend(clean_name_search_results.subtitles)
+                        rprint(
+                            f"[blue]Adding more results by searching for[/blue] [yellow]{clean_series_name}[/yellow], [green]found {len(clean_name_search_results.subtitles)} results[/green]"
+                        )
 
             # Second pass - search by IMDb IDs
             imdb_ids = set()

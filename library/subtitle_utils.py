@@ -11,6 +11,7 @@ import pickle
 import time
 import library.clean_subtitles as clean_subtitles
 import library.sync_subtitles as sync_subtitles
+from library.ai_subtitle_matcher import AISubtitleMatcher, SubtitleMatchResult
 
 # ================================ Paths =============================
 CURRENT_DIR_PATH = os.path.dirname(os.path.realpath(__file__))
@@ -21,8 +22,21 @@ TOKEN_STORAGE_FILE = os.path.join(CURRENT_DIR_PATH, "token.pkl")
 class SubtitleUtils:
     console = Console()
 
-    def __init__(self):
-        pass
+    def __init__(self, use_ai=True):
+        self.use_ai = use_ai
+        self.console.print("[cyan]Initializing subtitle utilities...[/cyan]")
+        if use_ai:
+            try:
+                self.console.print("[cyan]Initializing AI matcher...[/cyan]")
+                self.ai_matcher = AISubtitleMatcher()
+                self.console.print("[green]AI matcher initialized successfully[/green]")
+            except Exception as e:
+                self.console.print(
+                    f"[yellow]Warning: AI matcher initialization failed: {e}. Falling back to traditional matching.[/yellow]"
+                )
+                self.use_ai = False
+        else:
+            self.console.print("[yellow]AI matching is disabled[/yellow]")
 
     def extract_subdl_subtitle_id(self, url):
         if not url:
@@ -350,9 +364,9 @@ class SubtitleUtils:
             score = 0
 
             if not subtitle_release_name or not video_file_name:
-                return 0
+                return 0, 0, None  # Return traditional score, AI score, and AI details
 
-            # Hash match is strongest indicator
+            # Calculate traditional score
             if hash_match:
                 score += 100
 
@@ -391,100 +405,23 @@ class SubtitleUtils:
                     quality_score += 5
             score += min(quality_score, 45)
 
-            # Handle implicit season 1
-            implicit_s1_patterns = [
-                r"\.e(\d{1,2})\.",  # .E01.
-                r"\.ep(\d{1,2})\.",  # .EP01.
-                r"episode\.(\d{1,2})",  # episode.01
-            ]
-            video_is_implicit_s1 = any(
-                re.search(pattern, video_file_clean) for pattern in implicit_s1_patterns
-            )
-            sub_is_implicit_s1 = any(
-                re.search(pattern, sub_file_clean) for pattern in implicit_s1_patterns
-            )
-
-            # Word matching (max 30)
-            word_match_score = 0
-            video_file_parts = re.split(r"[.\s_-]", video_file_clean)
-            sub_file_parts = re.split(r"[.\s_-]", sub_file_clean)
-            series_name_parts = video_file_parts[:3]
-
-            for sub_part in sub_file_parts:
-                for file_part in video_file_parts:
-                    if sub_part == file_part:
-                        if file_part in series_name_parts:
-                            word_match_score += 5
-                        else:
-                            word_match_score += 1
-            score += min(word_match_score, 30)
-
-            # Fuzzy matching (max 100)
-            similarity = fuzz.token_sort_ratio(video_file_clean, sub_file_clean)
-            if similarity == 100:
-                score += 100
-            elif similarity > 90:
-                score += 50
-            elif similarity > 70:
-                score += 35
-            elif similarity > 40:
-                score += 10
-
-            # Episode/Season matching
-            season_source, episode_source = self.extract_season_and_episode(
-                video_file_name
-            )
-            season_target, episode_target = self.extract_season_and_episode(
-                subtitle_release_name
-            )
-
-            if video_is_implicit_s1 and sub_is_implicit_s1:
-                season_source = season_target = 1
-
-            # Episode match (50 points)
-            if episode_source and episode_target and episode_source == episode_target:
-                score += 50
-
-            # Season match (25 points)
-            if season_source and season_target and season_source == season_target:
-                score += 25
-            elif video_is_implicit_s1 and sub_is_implicit_s1:
-                score += 25
-
-            # Quality indicators (max 50: 5 terms × 10 points)
-            quality_indicator_score = 0
-            quality_indicators = ["hdtv", "720p", "1080p", "webdl", "webrip"]
-            for term in quality_indicators:
-                if term in video_file_clean and term in sub_file_clean:
-                    quality_indicator_score += 10
-            score += min(quality_indicator_score, 50)
-
-            # Perfect match bonus (75 points)
-            if (
-                (
-                    (season_source == season_target)
-                    or (video_is_implicit_s1 and sub_is_implicit_s1)
-                )
-                and episode_source
-                and episode_target
-                and episode_source == episode_target
-            ):
-                score += 75
-
-            normalized_score = self.normalize_score(score)
-            return normalized_score
+            return score, 0, None  # AI score will be calculated in batch
         except Exception as e:
             self.console.print(f"[bold red]Error scoring subtitle: {e}[/]")
-            return 0
+            return 0, 0, None
 
-    def sort_subtitle_list(self, subtitles_list, scores=None):
+    def sort_subtitle_list(self, subtitles_list, scores=None, ai_scores=None):
         try:
             sorted_subs = sorted(
                 subtitles_list,
                 key=lambda x: (
-                    scores.get(x["id"], 0)
-                    if scores
-                    else x["attributes"]["download_count"]
+                    (
+                        ai_scores.get(x["id"], 0) if ai_scores else 0
+                    ),  # First sort by AI score
+                    (
+                        scores.get(x["id"], 0) if scores else 0
+                    ),  # Then by traditional score
+                    x["attributes"]["download_count"],  # Finally by download count
                 ),
                 reverse=True,
             )
@@ -502,17 +439,61 @@ class SubtitleUtils:
             if subtitles_list is None:
                 return None
 
-            scores = None
+            scores = {}
+            ai_scores = {}
+            ai_details = {}
+
             if media_name:
-                scores = {}
+                # Calculate traditional scores
                 for sub in subtitles_list:
                     release_name = sub["attributes"]["release"]
                     hash_match = sub["attributes"]["moviehash_match"]
-                    score = self.score_subtitle(release_name, media_name, hash_match)
-                    scores[sub["id"]] = score
+                    traditional_score, _, _ = self.score_subtitle(
+                        release_name, media_name, hash_match
+                    )
+                    scores[sub["id"]] = traditional_score
 
-            sorted_subs = self.sort_subtitle_list(subtitles_list, scores)
-            self.display_subtitle_options_opensubtitle(sorted_subs, scores)
+                # Get AI scores in a single batch
+                if self.use_ai:
+                    try:
+                        self.console.print("[cyan]Starting AI analysis...[/cyan]")
+                        ai_results = self.ai_matcher.batch_analyze_subtitles(
+                            media_name, subtitles_list
+                        )
+                        if not ai_results:
+                            self.console.print(
+                                "[yellow]AI analysis returned no results[/yellow]"
+                            )
+                        else:
+                            self.console.print(
+                                f"[green]AI analysis completed with {len(ai_results)} results[/green]"
+                            )
+                            for result in ai_results:
+                                ai_scores[result.subtitle_id] = result.score
+                                ai_details[result.subtitle_id] = {
+                                    "reasoning": result.match_details.get(
+                                        "reasoning", "No reasoning provided"
+                                    ),
+                                    **result.match_details,
+                                }
+                    except Exception as e:
+                        self.console.print(
+                            f"[yellow]Batch AI analysis failed: {str(e)}. Using traditional scores only.[/yellow]"
+                        )
+                        import traceback
+
+                        self.console.print(
+                            f"[red]Traceback: {traceback.format_exc()}[/red]"
+                        )
+                else:
+                    self.console.print(
+                        "[yellow]Skipping AI analysis (disabled)[/yellow]"
+                    )
+
+            sorted_subs = self.sort_subtitle_list(subtitles_list, scores, ai_scores)
+            self.display_subtitle_options_opensubtitle(
+                sorted_subs, scores, ai_scores, ai_details
+            )
 
             while True:
                 try:
@@ -530,32 +511,70 @@ class SubtitleUtils:
                     self.console.print("[red]Please enter a valid number.[/red]")
         except Exception as e:
             self.console.print(f"[bold red]Error in manual subtitle selection: {e}[/]")
+            import traceback
+
+            self.console.print(f"[red]Traceback: {traceback.format_exc()}[/red]")
             return None
 
-    def auto_select_subtitle(self, video_file_name, subtitles_result_list):
+    def auto_select_subtitle(
+        self, video_file_name, subtitles_result_list, backend="opensubtitles"
+    ):
         try:
             max_score = -1
             best_subtitle = None
             scores = {}
+            ai_scores = {}
+            ai_details = {}
 
-            for subtitle in subtitles_result_list:
-                release_name = subtitle["attributes"]["release"]
-                hash_match = subtitle["attributes"]["moviehash_match"]
-                score = self.score_subtitle(release_name, video_file_name, hash_match)
-                scores[subtitle["id"]] = score
+            standardized_subs = [
+                self.standardize_subtitle_object(sub, backend)
+                for sub in subtitles_result_list
+            ]
+            standardized_subs = [sub for sub in standardized_subs if sub]
 
-                if score > max_score:
-                    max_score = score
+            # Calculate traditional scores first
+            for subtitle in standardized_subs:
+                attrs = subtitle["attributes"]
+                release_name = attrs["release"]
+                hash_match = attrs.get("moviehash_match", False)
+                traditional_score, _, _ = self.score_subtitle(
+                    release_name, video_file_name, hash_match
+                )
+                scores[subtitle["id"]] = traditional_score
+
+                if traditional_score > max_score:
+                    max_score = traditional_score
                     best_subtitle = subtitle
 
-            sorted_subs = self.sort_subtitle_list(subtitles_result_list, scores)
-            self.display_subtitle_options_opensubtitle(sorted_subs, scores)
+            # Get AI scores in a single batch
+            if self.use_ai:
+                try:
+                    ai_results = self.ai_matcher.batch_analyze_subtitles(
+                        video_file_name, standardized_subs, backend
+                    )
+                    for result in ai_results:
+                        ai_scores[result.subtitle_id] = result.score
+                        ai_details[result.subtitle_id] = {
+                            "reasoning": result.match_details.get("reasoning", ""),
+                            **result.match_details,
+                        }
+                except Exception as e:
+                    self.console.print(
+                        f"[yellow]Batch AI analysis failed: {e}. Using traditional scores only.[/yellow]"
+                    )
+
+            sorted_subs = self.sort_subtitle_list(standardized_subs, scores)
+            self.display_subtitle_options_opensubtitle(
+                sorted_subs, scores, ai_scores, ai_details
+            )
             return best_subtitle
         except Exception as e:
             self.console.print(f"[bold red]Error in auto subtitle selection: {e}[/]")
             return None
 
-    def display_subtitle_options_opensubtitle(self, subtitles_list, scores=None):
+    def display_subtitle_options_opensubtitle(
+        self, subtitles_list, scores=None, ai_scores=None, ai_details=None
+    ):
         try:
             table = Table(title="Available Subtitles")
 
@@ -566,35 +585,58 @@ class SubtitleUtils:
             table.add_column("Downloads", style="yellow", justify="right")
             table.add_column("Hash Match", style="blue", justify="center")
             table.add_column("Machine Translated", style="red", justify="center")
-            table.add_column("Auto Selection Score", style="cyan", justify="right")
+            table.add_column("Match Score", style="cyan", justify="right")
+            table.add_column("AI Score", style="green", justify="right")
+            table.add_column("AI Reasoning", style="yellow", no_wrap=False)
 
-            # Find max score if scores exist
+            # Find max scores
             max_score = max(scores.values()) if scores else 0
+            max_ai_score = max(ai_scores.values()) if ai_scores else 0
 
             for idx, sub in enumerate(subtitles_list, start=1):
                 attrs = sub["attributes"]
+                release = attrs["release"]
+                language = attrs["language"]
+                downloads = str(attrs["download_count"])
+                hash_match = attrs.get("moviehash_match", False)
+                machine_translated = attrs.get("machine_translated", False)
+
                 sub_id = sub["id"]
                 score = scores.get(sub_id, "") if scores else ""
+                ai_score = ai_scores.get(sub_id, "") if ai_scores else ""
 
-                # Format score with color if it matches max score
-                score_str = str(score) if score else "-"
+                # Format scores with color if they match max scores
+                score_str = str(round(score, 2)) if score != "" else "-"
                 if score and score == max_score:
                     score_str = f"[green]{score_str}[/]"
 
-                table.add_row(
+                ai_score_str = str(round(ai_score, 2)) if ai_score != "" else "-"
+                if ai_score and ai_score == max_ai_score:
+                    ai_score_str = f"[green]{ai_score_str}[/]"
+
+                # Get AI reasoning
+                reasoning = "-"
+                if ai_details and sub_id in ai_details:
+                    details = ai_details[sub_id]
+                    if isinstance(details, dict):
+                        reasoning = details.get("reasoning", "")
+                        if len(reasoning) > 50:
+                            reasoning = reasoning[:47] + "..."
+
+                row = [
                     str(idx),
                     sub_id,
-                    attrs["release"],
-                    attrs["language"],
-                    str(attrs["download_count"]),
-                    (
-                        "[green]o[/]"
-                        if attrs.get("moviehash_match", False)
-                        else "[red]x[/]"
-                    ),
-                    "[green]o[/]" if attrs["machine_translated"] else "[red]x[/]",
+                    release,
+                    language,
+                    downloads,
+                    "[green]o[/]" if hash_match else "[red]x[/]",
+                    "[green]o[/]" if machine_translated else "[red]x[/]",
                     score_str,
-                )
+                    ai_score_str,
+                    reasoning,
+                ]
+
+                table.add_row(*row)
 
             self.console.print(table)
         except Exception as e:

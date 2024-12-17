@@ -1,0 +1,107 @@
+providers:
+  google:
+    api_base: https://generativelanguage.googleapis.com/v1beta/
+    api_key: GOOGLE_API_KEY_ENV_VAR
+    models:
+      gemini-1.5-flash:
+        context_length: 8192
+        default_temperature: 0.2
+        top_p: 1.0
+      gemini-pro:
+        context_length: 32000
+        default_temperature: 0.2
+        top_p: 1.0
+      gemini-pro-vision:
+        context_length: 32000
+        default_temperature: 0.2
+        top_p: 1.0
+      gemini-ultra:
+        context_length: 128000
+        default_temperature: 0.2
+        top_p: 1.0
+  github:
+    api_base: https://models.inference.ai.azure.com
+    api_key: GITHUB_API_KEY_ENV_VAR
+    models:
+      gpt-4o-mini:
+        context_length: 8192
+        default_temperature: 0.2
+        top_p: 1.0
+      gpt-4o:
+        context_length: 8192
+        default_temperature: 0.2
+        top_p: 1.0
+      Meta-Llama-3.1-70B-Instruct:
+        context_length: 8192
+        default_temperature: 0.2
+        top_p: 1.0
+      Meta-Llama-3.1-405B-Instruct:
+        context_length: 8192
+        default_temperature: 0.2
+        top_p: 1.0
+      Mistral-large-2407:
+        context_length: 64000
+        default_temperature: 0.2
+        top_p: 1.0
+      jais-30b-chat:
+        context_length: 8192
+        default_temperature: 0.2
+        top_p: 1.0
+
+  groq:
+    api_base: https://api.groq.com/openai/v1
+    api_key: GROQ_API_KEY_ENV_VAR
+    models:
+      llama3-groq-70b-8192-tool-use-preview:
+        context_length: 8192
+        default_temperature: 0.2
+        top_p: 1.0
+      llama-3.1-70b-versatile:
+        context_length: 64000
+        default_temperature: 0.2
+        top_p: 1.0
+      mixtral-8x7b-32768:
+        context_length: 32000
+        default_temperature: 0.2
+        top_p: 1.0
+
+  mistral:
+    api_base: https://api.mistral.ai/v1
+    api_key: MISTRAL_API_KEY_ENV_VAR
+    models:
+      mistral-tiny:
+        context_length: 8192
+        default_temperature: 0.2
+        top_p: 1.0
+      mistral-small:
+        context_length: 32000
+        default_temperature: 0.2
+        top_p: 1.0
+      mistral-medium-latest:
+        context_length: 32000
+        default_temperature: 0.2
+        top_p: 1.0
+      mistral-large-latest:
+        context_length: 128000
+        default_temperature: 0.2
+        top_p: 1.0
+  glhf:
+    api_base: https://glhf.chat/api/openai/v1
+    api_key: GLHF_API_KEY_ENV_VAR
+    models:
+      hf:Qwen/Qwen2.5-Coder-32B-Instruct:
+        context_length: 8192
+        default_temperature: 0.2
+        top_p: 1.0
+      hf:meta-llama/Llama-3.3-70B-Instruct:
+        context_length: 128000
+        default_temperature: 0.2
+        top_p: 1.0
+  open-router:
+    api_base: https://openrouter.ai/api/v1
+    api_key: OPEN_ROUTER_API_KEY_ENV_VAR
+    models:
+      google/gemini-flash-1.5-exp:
+        context_length: 128000
+        default_temperature: 0.2
+        top_p: 1.0
