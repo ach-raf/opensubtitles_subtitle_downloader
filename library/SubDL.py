@@ -150,7 +150,7 @@ class SubDL:
                 for chunk in response.iter_content(chunk_size=8192):
                     f.write(chunk)
 
-            # Generate the desired subtitle filename
+            # Generate the desired subtitle filename for the selected episode
             if language_choice:
                 subtitle_filename = f"{video_input_path.stem}.{language_choice}.ass"
                 fallback_filename = f"{video_input_path.stem}.{language_choice}.srt"
@@ -158,59 +158,123 @@ class SubDL:
                 subtitle_filename = f"{video_input_path.stem}.ass"
                 fallback_filename = f"{video_input_path.stem}.srt"
 
+            # Extract season and episode from video filename
+            video_season, video_episode = (
+                self.subtitle_utils.extract_season_and_episode(str(video_input_path))
+            )
+
+            # Check if this is a movie (no season/episode info)
+            is_movie = video_season is None and video_episode is None
+            if not is_movie and (video_season is None or video_episode is None):
+                self.console.print(
+                    "[bold red]Error: Could not extract season/episode from video filename[/]"
+                )
+                return None
+
+            selected_subtitle_path = None
             with zipfile.ZipFile(zip_path, "r") as zip_ref:
                 extracted_files = zip_ref.namelist()
 
+                # Get all subtitle files
                 ass_files = [f for f in extracted_files if f.endswith(".ass")]
                 srt_files = [f for f in extracted_files if f.endswith(".srt")]
 
-                if ass_files:
-                    selected_file = ass_files[0]
-                    target_filename = subtitle_filename
-                elif srt_files:
-                    selected_file = srt_files[0]
-                    target_filename = fallback_filename
-                else:
+                if not ass_files and not srt_files:
                     self.console.print(
                         "[bold red]Error: No .ass or .srt subtitle files found in the archive.[/]"
                     )
                     return None
 
-                # Read subtitle content with encoding detection
-                with zip_ref.open(selected_file) as source:
-                    content = source.read()
-
-                    # Try different encodings
-                    encodings = ["utf-8", "utf-16", "cp1252", "iso-8859-1", "latin1"]
-                    decoded_content = None
-
-                    for encoding in encodings:
-                        try:
-                            decoded_content = content.decode(encoding)
-                            break
-                        except UnicodeDecodeError:
-                            continue
-
-                    if decoded_content is None:
-                        self.console.print(
-                            "[bold red]Error: Failed to decode subtitle file with any known encoding[/]"
+                # For movies, just use the first subtitle file
+                if is_movie:
+                    matching_subtitle = (
+                        (ass_files + srt_files)[0] if (ass_files or srt_files) else None
+                    )
+                else:
+                    # Find the matching episode subtitle for TV shows
+                    matching_subtitle = None
+                    for subtitle_file in ass_files + srt_files:
+                        sub_season, sub_episode = (
+                            self.subtitle_utils.extract_season_and_episode(
+                                subtitle_file
+                            )
                         )
-                        return None
+                        if sub_season == video_season and sub_episode == video_episode:
+                            matching_subtitle = subtitle_file
+                            break
 
-                    # Write with UTF-8 encoding
-                    with open(
-                        video_input_path.parent / target_filename, "w", encoding="utf-8"
-                    ) as target:
-                        target.write(decoded_content)
+                # Extract all subtitle files
+                for subtitle_file in ass_files + srt_files:
+                    try:
+                        # Read subtitle content with encoding detection
+                        with zip_ref.open(subtitle_file) as source:
+                            content = source.read()
 
-                self.console.print(
-                    f"[green]Subtitle downloaded and saved as: {target_filename}[/green]"
-                )
+                            # Try different encodings
+                            encodings = [
+                                "utf-8",
+                                "utf-16",
+                                "cp1252",
+                                "iso-8859-1",
+                                "latin1",
+                            ]
+                            decoded_content = None
+
+                            for encoding in encodings:
+                                try:
+                                    decoded_content = content.decode(encoding)
+                                    break
+                                except UnicodeDecodeError:
+                                    continue
+
+                            if decoded_content is None:
+                                self.console.print(
+                                    f"[bold red]Error: Failed to decode subtitle file {subtitle_file} with any known encoding[/]"
+                                )
+                                continue
+
+                            # Determine target filename
+                            # If it's the matching episode's subtitle, use the standard naming
+                            if subtitle_file == matching_subtitle:
+                                target_filename = (
+                                    subtitle_filename
+                                    if subtitle_file.endswith(".ass")
+                                    else fallback_filename
+                                )
+                                selected_subtitle_path = (
+                                    video_input_path.parent / target_filename
+                                )
+                            else:
+                                # For other subtitles, keep their original names but add language code
+                                original_name = Path(subtitle_file).stem
+                                extension = Path(subtitle_file).suffix
+                                target_filename = (
+                                    f"{original_name}.{language_choice}{extension}"
+                                )
+
+                            # Write with UTF-8 encoding
+                            target_path = video_input_path.parent / target_filename
+                            with open(target_path, "w", encoding="utf-8") as target:
+                                target.write(decoded_content)
+
+                            self.console.print(
+                                f"[green]Subtitle extracted and saved as: {target_filename}[/green]"
+                            )
+
+                    except Exception as e:
+                        self.console.print(
+                            f"[bold red]Error processing subtitle file {subtitle_file}: {e}[/]"
+                        )
 
             # Clean up the zip file
             zip_path.unlink()
 
-            return video_input_path.parent / target_filename
+            if selected_subtitle_path is None:
+                self.console.print(
+                    f"[bold yellow]Warning: Could not find matching episode (S{video_season:02d}E{video_episode:02d}) in the subtitle pack[/]"
+                )
+
+            return selected_subtitle_path
 
         except requests.exceptions.RequestException as e:
             self.console.print(f"[bold red]Error downloading subtitle: {e}[/]")

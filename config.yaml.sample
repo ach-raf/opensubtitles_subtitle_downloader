@@ -1,7 +1,7 @@
 general:
   preferred_backend: ask # Options: opensubtitles, subdl, auto, ask, auto is not yet implemented in a meaningful way
   skip_interactive_menu: false # Options: true, false
-  skip_sync: false
+  sync_audio_to_subs: ask # Options: true, false, ask
   auto_selection: false
   opt_force_utf8: true
 

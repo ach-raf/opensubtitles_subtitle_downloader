@@ -248,6 +248,7 @@ class SubtitleUtils:
             # Extract title and year, now knowing where season/episode info is
             # Remove common episode/season patterns
             clean_name = media_name
+
             patterns_to_remove = [
                 r"[Ss]\d{1,2}[Ee]\d{1,2}",
                 r"[Ss]\d{1,2}\s*-\s*[Ee]\d{1,2}",
@@ -272,6 +273,22 @@ class SubtitleUtils:
             # Generate alternate formats
             formats = []
 
+            # Check for Mr. or Ms. in the title and create alternate versions
+            mr_match = re.search(r"Mr\.\s+(\w+)", title, re.IGNORECASE)
+            ms_match = re.search(r"Ms\.\s+(\w+)", title, re.IGNORECASE)
+
+            if mr_match:
+                alternate_title = re.sub(r"Mr\.\s+", "", title, flags=re.IGNORECASE)
+                title_with_mister = re.sub(
+                    r"Mr\.", "Mister", title, flags=re.IGNORECASE
+                )
+                formats.extend([alternate_title, title_with_mister])
+
+            if ms_match:
+                alternate_title = re.sub(r"Ms\.\s+", "", title, flags=re.IGNORECASE)
+                title_with_miss = re.sub(r"Ms\.", "Miss", title, flags=re.IGNORECASE)
+                formats.extend([alternate_title, title_with_miss])
+
             # Basic formats
             if season:
                 formats.extend(
@@ -295,7 +312,7 @@ class SubtitleUtils:
             if season == 1:
                 formats.extend(
                     [
-                        f"{title.replace(' ', '.')}-E{episode}",
+                        f"{title} E{episode:02d}",
                         f"{title.lower().replace(' ', '.')}.E{episode:02d}",
                     ]
                 )
@@ -304,6 +321,28 @@ class SubtitleUtils:
             formats.append(
                 f"{title.lower().replace(' ', '-')}-episode-{season}-{episode}"
             )
+
+            # If we found Mr. or Ms. alternates, also add their variations with season/episode
+            if mr_match or ms_match:
+                for alt_title in formats[
+                    :
+                ]:  # Create a copy of the list to iterate over
+                    if mr_match:
+                        alt_without_mr = re.sub(
+                            r"Mr\.\s+", "", alt_title, flags=re.IGNORECASE
+                        )
+                        alt_with_mister = re.sub(
+                            r"Mr\.", "Mister", alt_title, flags=re.IGNORECASE
+                        )
+                        formats.extend([alt_without_mr, alt_with_mister])
+                    if ms_match:
+                        alt_without_ms = re.sub(
+                            r"Ms\.\s+", "", alt_title, flags=re.IGNORECASE
+                        )
+                        alt_with_miss = re.sub(
+                            r"Ms\.", "Miss", alt_title, flags=re.IGNORECASE
+                        )
+                        formats.extend([alt_without_ms, alt_with_miss])
 
             return list(
                 dict.fromkeys(formats)
