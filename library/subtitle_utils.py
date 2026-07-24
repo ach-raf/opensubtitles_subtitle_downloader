@@ -27,9 +27,12 @@ class SubtitleUtils:
     def extract_subdl_subtitle_id(self, url):
         if not url:
             return None
-        # url format is '/subtitle/3158195-3172856.zip'
+        # v1: '/subtitle/3158195-3172856.zip'
+        # v2: '/subtitle/3158195-3172856.zip?api_key=...'  (strip the query first)
+        url = url.split("?")[0]
         parts = url.split("/")
-        if len(parts) >= 3:
+        # 'and parts[2]' makes '/subtitle/' (empty id segment) return None, not ''
+        if len(parts) >= 3 and parts[2]:
             return parts[2].replace(".zip", "")
         return None
 
@@ -41,8 +44,11 @@ class SubtitleUtils:
                     return subtitle  # Already in desired format
 
                 case "subdl":
+                    url = subtitle.get("url")
+                    if not url:
+                        return None
                     return {
-                        "id": self.extract_subdl_subtitle_id(subtitle.get("url", "")),
+                        "id": self.extract_subdl_subtitle_id(url),
                         "attributes": {
                             "release": subtitle.get("release_name", ""),
                             "language": subtitle.get("language", "").lower(),
@@ -50,12 +56,13 @@ class SubtitleUtils:
                             "ai_translated": False,  # SubDL doesn't provide this
                             "machine_translated": False,
                             "moviehash_match": False,
-                            "url": subtitle.get("url", ""),
+                            "url": url,
                             "hi": subtitle.get("hi", False),
                             "full_season": subtitle.get("full_season", False),
                             "author": subtitle.get("author", "Unknown"),
                             "season": subtitle.get("season"),
                             "episode": subtitle.get("episode"),
+                            "unpack_files": subtitle.get("unpack_files", []),
                         },
                     }
         except Exception as e:
