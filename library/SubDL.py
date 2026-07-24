@@ -53,9 +53,8 @@ class SubDL:
             return [], []
         if "error" in data:
             err = data["error"]
-            self.console.print(
-                f"[bold red]SubDL API error: {err.get('message', err)}[/]"
-            )
+            msg = err.get("message", err) if isinstance(err, dict) else err
+            self.console.print(f"[bold red]SubDL API error: {msg}[/]")
             return [], []
         subtitles = data.get("subtitles", []) or []
         metadata = data.get("results", []) or []
@@ -119,6 +118,93 @@ class SubDL:
         except (KeyError, ValueError) as e:
             self.console.print(f"[bold red]Error decoding SubDL API response: {e}[/]")
             return SearchResult(subtitles=[], metadata_results=[])
+
+    def filename_search(self, filename, languages="en", subs_per_page=30) -> SearchResult:
+        """Search by release filename via /files/search. Returns matched title + its subtitles."""
+        params = {
+            "filename": filename,
+            "languages": languages,
+            "subs_per_page": subs_per_page,
+        }
+        try:
+            data = self._request("/files/search", params)
+            subtitles, metadata = self._parse(data)
+            standardized = self._standardize(subtitles)
+            return SearchResult(subtitles=standardized, metadata_results=metadata)
+        except requests.exceptions.RequestException as e:
+            self.console.print(f"[bold red]Error during SubDL filename search: {e}[/]")
+            return SearchResult(subtitles=[], metadata_results=[])
+        except (KeyError, ValueError) as e:
+            self.console.print(f"[bold red]Error decoding SubDL filename search response: {e}[/]")
+            return SearchResult(subtitles=[], metadata_results=[])
+
+    def movie_search(self, q, type="", limit=10):
+        """Resolve a title/name to sd_id/imdb_id/tmdb_id via /movies/search. Returns the results list."""
+        params = {"q": q, "limit": limit}
+        if type:
+            params["type"] = type
+        try:
+            data = self._request("/movies/search", params)
+            _, metadata = self._parse(data)
+            return metadata
+        except requests.exceptions.RequestException as e:
+            self.console.print(f"[bold red]Error during SubDL movie search: {e}[/]")
+            return []
+        except (KeyError, ValueError) as e:
+            self.console.print(f"[bold red]Error decoding SubDL movie search response: {e}[/]")
+            return []
+
+    def _gather_candidates(self, path, language):
+        """Run all search sources, merge, filter, and dedupe into one candidate list."""
+        media_name = path.stem
+        subs = []
+        metadata = []
+
+        def add(result):
+            subs.extend(result.subtitles)
+            metadata.extend(result.metadata_results)
+
+        # 1) NEW: purpose-built filename search (also resolves the title id)
+        add(self.filename_search(filename=media_name, languages=language))
+
+        # 2) by filename (legacy)
+        add(self.search(file_name=media_name, languages=language))
+
+        # 3) by series name
+        series_match = re.search(r"(.+?)(?:\s-\sS\d{2}E\d{2}|\s-\s\d{4})", media_name)
+        if series_match:
+            add(self.search(film_name=series_match.group(1), languages=language))
+
+        # resolve season/episode once for the precise TV pass
+        video_season, video_episode = self.subtitle_utils.extract_season_and_episode(media_name)
+
+        # 4) by IMDb ids resolved from any metadata, narrowed by season/episode for TV
+        imdb_ids = {m["imdb_id"] for m in metadata if m.get("imdb_id")}
+        for imdb_id in imdb_ids:
+            add(self.search(
+                imdb_id=imdb_id, languages=language,
+                season=video_season, episode=video_episode,
+            ))
+
+        # 5) by alternate filename variants
+        for term in (self.subtitle_utils.get_alternate_names(media_name) or []):
+            add(self.search(file_name=term, languages=language))
+
+        # 6) last-resort title resolution if nothing matched a title id
+        if not imdb_ids:
+            for title in self.movie_search(media_name):
+                if title.get("imdb_id"):
+                    add(self.search(
+                        imdb_id=title["imdb_id"], languages=language,
+                        season=video_season, episode=video_episode,
+                    ))
+
+        # hearing-impaired preference (v2 has no hi param; filter client-side)
+        if self.hearing_impaired:
+            subs = [s for s in subs if s.get("attributes", {}).get("hi")]
+
+        # dedupe by subtitle id
+        return list({s["id"]: s for s in subs if s.get("id")}.values())
 
     def _select_unpack_file(self, attrs, video_season, video_episode, is_movie):
         """Pick the best single-file URL from unpack_files. Returns (url, format) or (None, None)."""
@@ -300,76 +386,10 @@ class SubDL:
             rprint(
                 f"[cyan]Searching for subtitles for[/cyan] [yellow]{media_name}[/yellow]"
             )
-            subtitle_path = Path(path.parent, f"{path.stem}.{language_choice}.srt")
-
-            # Initial search by filename
-            search_results = self.search(
-                file_name=media_name, languages=language_choice
-            )
-            subtitles_list = search_results.subtitles
-            if not subtitles_list:
-                rprint(f"[red]No subtitles found for {media_name}[/red]")
-            else:
-                rprint(f"[green]Found {len(subtitles_list)} results[/green]")
-
-            # parse series name and search for subtitles by series name alone series name exapmle: "The Flash 2014", "Dune - Prophecy (2024) - S01E01 - - The Hidden Hand [AMZN WEBDL-1080p][8bit][h264][EAC3 5.1]-playWEB"
-            series_name = re.search(
-                r"(.+?)(?:\s-\sS\d{2}E\d{2}|\s-\s\d{4})", media_name
-            )
-
-            if series_name:
-                series_name = series_name.group(1)
-                rprint(
-                    f"[cyan]Searching for subtitles for series[/cyan] [yellow]{series_name}[/yellow]"
-                )
-                series_name_search_results = self.search(
-                    film_name=series_name, languages=language_choice
-                )
-                subtitles_list.extend(series_name_search_results.subtitles)
-                if not subtitles_list:
-                    rprint(f"[red]No subtitles found for {series_name}[/red]")
-                else:
-                    rprint(f"[green]Found {len(subtitles_list)} results[/green]")
-
-            # Second pass - search by IMDb IDs
-            imdb_ids = set()
-            for result in search_results.metadata_results:
-                if "imdb_id" in result:
-                    imdb_id = result["imdb_id"]
-                    if imdb_id:
-                        imdb_ids.add(imdb_id)
-
-            # Search for each IMDb ID
-            for imdb_id in imdb_ids:
-                imdb_results = self.search(
-                    imdb_id=imdb_id, languages=language_choice
-                ).subtitles
-                if imdb_results:
-                    subtitles_list.extend(imdb_results)
-                    rprint(
-                        f"[blue]Adding more results by searching IMDb ID[/blue] [yellow]{imdb_id}[/yellow], [green]found {len(imdb_results)} results[/green]"
-                    )
-
-            # Add more results using alternate names
-            new_search_terms = self.subtitle_utils.get_alternate_names(media_name)
-            if new_search_terms:
-                for term in new_search_terms:
-                    temp_results = self.search(
-                        file_name=term,
-                        languages=language_choice,
-                    ).subtitles
-                    if temp_results:
-                        subtitles_list.extend(temp_results)
-                        rprint(
-                            f"[blue]Adding more results by searching for[/blue] [yellow]{term}[/yellow], [green]found {len(temp_results)} results[/green]"
-                        )
-
+            subtitles_list = self._gather_candidates(path, language_choice)
             if not subtitles_list:
                 rprint(f"[red]No subtitles found for {media_name}[/red]")
                 return False
-
-            # Remove duplicates
-            subtitles_list = list({v["id"]: v for v in subtitles_list}.values())
             rprint(
                 f"[green]Total unique results after all searches: {len(subtitles_list)}[/green]"
             )
