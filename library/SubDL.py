@@ -3,7 +3,6 @@ import requests
 import zipfile
 from pathlib import Path
 import re
-import json
 from rich.console import Console
 from rich.table import Table
 from rich import print as rprint
@@ -31,151 +30,174 @@ class SubDL:
         self.sync_audio_to_subs = sync_audio_to_subs
         self.hearing_impaired = hearing_impaired
         self.auto_select = auto_select
-        self.base_url = "https://api.subdl.com/api/v1/subtitles"
-        self.download_base_url = "https://dl.subdl.com/subtitle/"
+        self.api_base_url = "https://api.subdl.com/api/v2"
+        self.download_base_url = "https://dl.subdl.com"
         self.console = Console()
         self.subtitle_utils = SubtitleUtils()
         self.standardize_subtitle_objects = None
 
+    def _request(self, path, params):
+        """GET a v2 endpoint with Bearer auth and return parsed JSON."""
+        response = requests.get(
+            self.api_base_url + path,
+            params=params,
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            timeout=10,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def _parse(self, data):
+        """Return (subtitles, metadata). Handles v2 error and success shapes."""
+        if not isinstance(data, dict):
+            return [], []
+        if "error" in data:
+            err = data["error"]
+            self.console.print(
+                f"[bold red]SubDL API error: {err.get('message', err)}[/]"
+            )
+            return [], []
+        subtitles = data.get("subtitles", []) or []
+        metadata = data.get("results", []) or []
+        return subtitles, metadata
+
+    def _standardize(self, subtitles):
+        standardized = [
+            self.subtitle_utils.standardize_subtitle_object(sub, "subdl")
+            for sub in subtitles
+        ]
+        return [s for s in standardized if s]
+
     def search(
         self,
-        film_name="",
         file_name="",
+        film_name="",
         imdb_id="",
         tmdb_id="",
-        season_number=None,
-        episode_number=None,
-        content_type="",
-        year=None,
-        languages="en",
-        full_season=False,
-        comment=False,
-        releases=False,
         sd_id="",
+        languages="en",
+        season=None,
+        episode=None,
+        full_season=False,
+        type="",
+        unpack=True,
     ) -> SearchResult:
-        """Search for subtitles using the SubDL API.
-
-        Args:
-            film_name (str): Text search by film name
-            file_name (str): Search by file name
-            imdb_id (str): Search by IMDb ID
-            tmdb_id (str): Search by TMDB ID
-            season_number (int): Specific season number for TV shows
-            episode_number (int): Specific episode number for TV shows
-            content_type (str): Type of content ('movie' or 'tv')
-            year (int): Release year of the movie/show
-            languages (str): Comma-separated language codes
-            full_season (bool): Include full season subtitles
-            comment (bool): Include author comments
-            releases (bool): Include releases list
-            sd_id (str): Search by SubDL ID
-        """
-        params = {
-            "api_key": self.api_key,
-            "subs_per_page": 30,
-            "languages": languages,
-        }
-
-        if self.hearing_impaired:
-            params["hi"] = 1
+        """Search subtitles via /subtitles/search. Accepts any one identifier."""
+        params = {"languages": languages}
+        if file_name:
+            params["file_name"] = file_name
+        if film_name:
+            params["film_name"] = film_name
+        if imdb_id:
+            params["imdb_id"] = imdb_id
+        if tmdb_id:
+            params["tmdb_id"] = tmdb_id
+        if sd_id:
+            params["sd_id"] = sd_id
+        if type:
+            params["type"] = type
+        if season is not None:
+            params["season"] = season
+        if episode is not None:
+            params["episode"] = episode
         if full_season:
             params["full_season"] = 1
-        if comment:
-            params["comment"] = 1
-        if releases:
-            params["releases"] = 1
-
-        # Add optional search parameters
-        for param, value in {
-            "film_name": film_name,
-            "file_name": file_name,
-            "imdb_id": imdb_id,
-            "tmdb_id": tmdb_id,
-            "season_number": season_number,
-            "episode_number": episode_number,
-            "type": content_type,
-            "year": year,
-            "sd_id": sd_id,
-        }.items():
-            if value:
-                params[param] = value
+        if unpack:
+            params["unpack"] = 1
 
         try:
-            response = requests.get(self.base_url, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-
-            if data["status"]:
-                subtitles = data.get("subtitles", [])
-                if subtitles:
-                    self.console.print(
-                        f"[green]Found {len(subtitles)} subtitles[/green]"
-                    )
-
-                # Standardize subtitle objects
-                self.standardize_subtitle_objects = [
-                    self.subtitle_utils.standardize_subtitle_object(sub, "subdl")
-                    for sub in subtitles
-                ]
-
-                return SearchResult(
-                    subtitles=self.standardize_subtitle_objects,
-                    metadata_results=data.get("results", []),
-                )
-
-            self.console.print(
-                f"[bold red]Error: SubDL API returned error: {data.get('error', 'Unknown error')}[/]"
-            )
-            return SearchResult(subtitles=[], metadata_results=[])
-
+            data = self._request("/subtitles/search", params)
+            subtitles, metadata = self._parse(data)
+            standardized = self._standardize(subtitles)
+            if standardized:
+                self.console.print(f"[green]Found {len(standardized)} subtitles[/green]")
+            self.standardize_subtitle_objects = standardized
+            return SearchResult(subtitles=standardized, metadata_results=metadata)
         except requests.exceptions.RequestException as e:
             self.console.print(f"[bold red]Error during SubDL API request: {e}[/]")
             return SearchResult(subtitles=[], metadata_results=[])
-        except (KeyError, json.decoder.JSONDecodeError) as e:
+        except (KeyError, ValueError) as e:
             self.console.print(f"[bold red]Error decoding SubDL API response: {e}[/]")
             return SearchResult(subtitles=[], metadata_results=[])
-        except Exception as e:
-            self.console.print(f"[bold red]Unexpected error in SubDL search: {e}[/]")
-            return SearchResult(subtitles=[], metadata_results=[])
 
-    def download_single_subtitle(
-        self, subtitle_id, video_input_path, language_choice=""
-    ):
-        download_url = f"{self.download_base_url}{subtitle_id}"
-        try:
-            response = requests.get(download_url, stream=True, timeout=10)
-            response.raise_for_status()
-            zip_path = video_input_path.with_suffix(".zip")
-            with open(zip_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-
-            # Generate the desired subtitle filename for the selected episode
-            if language_choice:
-                subtitle_filename = f"{video_input_path.stem}.{language_choice}.ass"
-                fallback_filename = f"{video_input_path.stem}.{language_choice}.srt"
-            else:
-                subtitle_filename = f"{video_input_path.stem}.ass"
-                fallback_filename = f"{video_input_path.stem}.srt"
-
-            # Extract season and episode from video filename
-            video_season, video_episode = (
-                self.subtitle_utils.extract_season_and_episode(str(video_input_path))
+    def _select_unpack_file(self, attrs, video_season, video_episode, is_movie):
+        """Pick the best single-file URL from unpack_files. Returns (url, format) or (None, None)."""
+        unpack_files = attrs.get("unpack_files") or []
+        if not unpack_files:
+            return None, None
+        if is_movie:
+            chosen = unpack_files[0]
+        else:
+            chosen = next(
+                (f for f in unpack_files
+                 if f.get("season") == video_season and f.get("episode") == video_episode),
+                None,
             )
-
-            # Check if this is a movie (no season/episode info)
-            is_movie = video_season is None and video_episode is None
-            if not is_movie and (video_season is None or video_episode is None):
-                self.console.print(
-                    "[bold red]Error: Could not extract season/episode from video filename[/]"
+            if chosen is None:
+                chosen = next(
+                    (f for f in unpack_files if f.get("episode") == video_episode), None
                 )
-                return None
+            if chosen is None:
+                chosen = unpack_files[0]
+        return chosen.get("url"), chosen.get("format", "srt")
 
-            selected_subtitle_path = None
+    def _decode_bytes(self, content):
+        for encoding in ("utf-8", "utf-16", "cp1252", "iso-8859-1", "latin1"):
+            try:
+                return content.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+        return content.decode("utf-8", errors="replace")
+
+    def _target_subtitle_name(self, video_input_path, language_choice, ext):
+        if language_choice:
+            return f"{video_input_path.stem}.{language_choice}{ext}"
+        return f"{video_input_path.stem}{ext}"
+
+    def _download_single_file(self, rel_url, fmt, video_input_path, language_choice):
+        abs_url = self.download_base_url + rel_url
+        response = requests.get(abs_url, timeout=10)
+        response.raise_for_status()
+        ext = f".{fmt}" if fmt in ("srt", "ass", "vtt") else ".srt"
+        target_filename = self._target_subtitle_name(video_input_path, language_choice, ext)
+        target_path = video_input_path.parent / target_filename
+        decoded = self._decode_bytes(response.content)
+        with open(target_path, "w", encoding="utf-8") as f:
+            f.write(decoded)
+        self.console.print(
+            f"[green]Subtitle downloaded and saved as: {target_filename}[/green]"
+        )
+        return target_path
+
+    def _download_zip(
+        self, rel_url, video_input_path, language_choice, video_season, video_episode, is_movie
+    ):
+        abs_url = self.download_base_url + rel_url
+        response = requests.get(abs_url, stream=True, timeout=10)
+        response.raise_for_status()
+        zip_path = video_input_path.with_suffix(".zip")
+        with open(zip_path, "wb") as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+
+        if language_choice:
+            subtitle_filename = f"{video_input_path.stem}.{language_choice}.ass"
+            fallback_filename = f"{video_input_path.stem}.{language_choice}.srt"
+        else:
+            subtitle_filename = f"{video_input_path.stem}.ass"
+            fallback_filename = f"{video_input_path.stem}.srt"
+
+        if not is_movie and (video_season is None or video_episode is None):
+            self.console.print(
+                "[bold red]Error: Could not extract season/episode from video filename[/]"
+            )
+            zip_path.unlink(missing_ok=True)
+            return None
+
+        selected_subtitle_path = None
+        try:
             with zipfile.ZipFile(zip_path, "r") as zip_ref:
                 extracted_files = zip_ref.namelist()
-
-                # Get all subtitle files
                 ass_files = [f for f in extracted_files if f.endswith(".ass")]
                 srt_files = [f for f in extracted_files if f.endswith(".srt")]
 
@@ -185,103 +207,84 @@ class SubDL:
                     )
                     return None
 
-                # For movies, just use the first subtitle file
                 if is_movie:
-                    matching_subtitle = (
-                        (ass_files + srt_files)[0] if (ass_files or srt_files) else None
-                    )
+                    matching_subtitle = (ass_files + srt_files)[0]
                 else:
-                    # Find the matching episode subtitle for TV shows
                     matching_subtitle = None
                     for subtitle_file in ass_files + srt_files:
                         sub_season, sub_episode = (
-                            self.subtitle_utils.extract_season_and_episode(
-                                subtitle_file
-                            )
+                            self.subtitle_utils.extract_season_and_episode(subtitle_file)
                         )
                         if sub_season == video_season and sub_episode == video_episode:
                             matching_subtitle = subtitle_file
                             break
 
-                # Extract all subtitle files
                 for subtitle_file in ass_files + srt_files:
                     try:
-                        # Read subtitle content with encoding detection
                         with zip_ref.open(subtitle_file) as source:
-                            content = source.read()
+                            decoded_content = self._decode_bytes(source.read())
 
-                            # Try different encodings
-                            encodings = [
-                                "utf-8",
-                                "utf-16",
-                                "cp1252",
-                                "iso-8859-1",
-                                "latin1",
-                            ]
-                            decoded_content = None
-
-                            for encoding in encodings:
-                                try:
-                                    decoded_content = content.decode(encoding)
-                                    break
-                                except UnicodeDecodeError:
-                                    continue
-
-                            if decoded_content is None:
-                                self.console.print(
-                                    f"[bold red]Error: Failed to decode subtitle file {subtitle_file} with any known encoding[/]"
-                                )
-                                continue
-
-                            # Determine target filename
-                            # If it's the matching episode's subtitle, use the standard naming
-                            if subtitle_file == matching_subtitle:
-                                target_filename = (
-                                    subtitle_filename
-                                    if subtitle_file.endswith(".ass")
-                                    else fallback_filename
-                                )
-                                selected_subtitle_path = (
-                                    video_input_path.parent / target_filename
-                                )
-                            else:
-                                # For other subtitles, keep their original names but add language code
-                                original_name = Path(subtitle_file).stem
-                                extension = Path(subtitle_file).suffix
-                                target_filename = (
-                                    f"{original_name}.{language_choice}{extension}"
-                                )
-
-                            # Write with UTF-8 encoding
-                            target_path = video_input_path.parent / target_filename
-                            with open(target_path, "w", encoding="utf-8") as target:
-                                target.write(decoded_content)
-
-                            self.console.print(
-                                f"[green]Subtitle extracted and saved as: {target_filename}[/green]"
+                        if subtitle_file == matching_subtitle:
+                            target_filename = (
+                                subtitle_filename if subtitle_file.endswith(".ass") else fallback_filename
                             )
+                            selected_subtitle_path = video_input_path.parent / target_filename
+                        else:
+                            original_name = Path(subtitle_file).stem
+                            extension = Path(subtitle_file).suffix
+                            target_filename = f"{original_name}.{language_choice}{extension}"
 
+                        target_path = video_input_path.parent / target_filename
+                        with open(target_path, "w", encoding="utf-8") as target:
+                            target.write(decoded_content)
+                        self.console.print(
+                            f"[green]Subtitle extracted and saved as: {target_filename}[/green]"
+                        )
                     except Exception as e:
                         self.console.print(
                             f"[bold red]Error processing subtitle file {subtitle_file}: {e}[/]"
                         )
+        finally:
+            zip_path.unlink(missing_ok=True)
 
-            # Clean up the zip file
-            zip_path.unlink()
+        if selected_subtitle_path is None:
+            self.console.print(
+                f"[bold yellow]Warning: Could not find matching episode "
+                f"(S{video_season:02d}E{video_episode:02d}) in the subtitle pack[/]"
+            )
+        return selected_subtitle_path
 
-            if selected_subtitle_path is None:
-                self.console.print(
-                    f"[bold yellow]Warning: Could not find matching episode (S{video_season:02d}E{video_episode:02d}) in the subtitle pack[/]"
+    def download_single_subtitle(self, subtitle, video_input_path, language_choice=""):
+        """Download one subtitle. Prefers an unpacked single file; falls back to the zip archive."""
+        attrs = subtitle.get("attributes", {}) if isinstance(subtitle, dict) else {}
+        try:
+            video_season, video_episode = self.subtitle_utils.extract_season_and_episode(
+                str(video_input_path)
+            )
+            is_movie = video_season is None and video_episode is None
+
+            single_url, single_format = self._select_unpack_file(
+                attrs, video_season, video_episode, is_movie
+            )
+            if single_url:
+                return self._download_single_file(
+                    single_url, single_format, video_input_path, language_choice
                 )
 
-            return selected_subtitle_path
-
+            zip_url = attrs.get("url", "")
+            if not zip_url:
+                self.console.print("[bold red]Error: subtitle has no download url.[/]")
+                return None
+            return self._download_zip(
+                zip_url, video_input_path, language_choice,
+                video_season, video_episode, is_movie,
+            )
         except requests.exceptions.RequestException as e:
             self.console.print(f"[bold red]Error downloading subtitle: {e}[/]")
             return None
         except zipfile.BadZipFile:
             self.console.print(
-                f"[bold red]Error: Downloaded file is not a valid ZIP for subtitle ID: {subtitle_id}[/]"
+                "[bold red]Error: Downloaded file is not a valid ZIP.[/]"
             )
             return None
         except Exception as e:
@@ -385,7 +388,7 @@ class SubDL:
                 return False
 
             subtitle_path = self.download_single_subtitle(
-                selected_sub["id"], path, language_choice
+                selected_sub, path, language_choice
             )
             if subtitle_path is None:
                 return False
