@@ -224,7 +224,10 @@ class SubDL:
                     (f for f in unpack_files if f.get("episode") == video_episode), None
                 )
             if chosen is None:
-                chosen = unpack_files[0]
+                # No episode match: return no single file so download_single_subtitle
+                # falls back to the zip path (filename-based match, loud failure).
+                # Do NOT default to unpack_files[0] -- that can save the wrong episode.
+                return None, None
         return chosen.get("url"), chosen.get("format", "srt")
 
     def _decode_bytes(self, content):
