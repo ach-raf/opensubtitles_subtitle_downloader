@@ -83,7 +83,8 @@ class SubtitleDownloader:
                 "https://api.opensubtitles.com/api/v1/login"
             )
             subdl_available = self._check_api_availability(
-                "https://api.subdl.com/api/v1/subtitles"
+                "https://api.subdl.com/api/v2/me",
+                headers={"Authorization": f"Bearer {self.config['subdl']['api_key']}"},
             )
 
             if opensubtitles_available and subdl_available:
@@ -102,9 +103,9 @@ class SubtitleDownloader:
         else:
             return preferred_backend
 
-    def _check_api_availability(self, url: str) -> bool:
+    def _check_api_availability(self, url, headers=None) -> bool:
         try:
-            response = requests.get(url, timeout=5)
+            response = requests.get(url, timeout=5, headers=headers)
             return response.status_code == 200
         except requests.exceptions.RequestException:
             return False
