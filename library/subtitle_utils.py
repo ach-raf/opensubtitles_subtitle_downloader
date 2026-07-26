@@ -36,6 +36,24 @@ class SubtitleUtils:
             return parts[2].replace(".zip", "")
         return None
 
+    def extract_subsource_subtitle_id(self, subtitle):
+        """Pull the numeric SubSource subtitle id from the raw API object.
+
+        SubSource returns `subtitleId` (int) on the subtitle object directly, so we
+        prefer that. The `link` field (e.g. '/subtitle/inception-2010/english/10215904')
+        is used as a fallback, taking its last numeric path segment.
+        """
+        sub_id = subtitle.get("subtitleId")
+        if sub_id is not None:
+            return str(sub_id)
+        link = subtitle.get("link", "") or ""
+        link = link.split("?")[0].rstrip("/")
+        if link:
+            last = link.rsplit("/", 1)[-1]
+            if last.isdigit():
+                return last
+        return None
+
     def standardize_subtitle_object(self, subtitle, backend="opensubtitles"):
         """Convert subtitle object to standard format"""
         try:
@@ -63,6 +81,49 @@ class SubtitleUtils:
                             "season": subtitle.get("season"),
                             "episode": subtitle.get("episode"),
                             "unpack_files": subtitle.get("unpack_files", []),
+                        },
+                    }
+
+                case "subsource":
+                    sub_id = self.extract_subsource_subtitle_id(subtitle)
+                    if sub_id is None:
+                        return None
+                    # releaseInfo is a list of release names; join them so the
+                    # scorer can match against any of them.
+                    release_info = subtitle.get("releaseInfo")
+                    if isinstance(release_info, list):
+                        release = " | ".join(r for r in release_info if r)
+                    else:
+                        release = release_info or ""
+                    # SubSource languages are full names ("english"); keep verbatim
+                    # but lower-cased for consistency with other backends.
+                    language = (subtitle.get("language") or "").lower()
+                    contributors = subtitle.get("contributors") or []
+                    author = (
+                        contributors[0].get("displayname", "Unknown")
+                        if contributors and isinstance(contributors[0], dict)
+                        else "Unknown"
+                    )
+                    prod = (subtitle.get("productionType") or "").lower()
+                    return {
+                        "id": sub_id,
+                        "attributes": {
+                            "release": release,
+                            "language": language,
+                            "download_count": subtitle.get("downloads", 0) or 0,
+                            # Only "machine" productionType is considered AI/MT.
+                            "ai_translated": prod == "machine",
+                            "machine_translated": prod == "machine",
+                            "moviehash_match": False,
+                            # url is the human-readable link; the real download URL is
+                            # built from the id by SubSource._download_url_for.
+                            "url": subtitle.get("link", ""),
+                            "hi": bool(subtitle.get("hearingImpaired")),
+                            "full_season": False,
+                            "author": author,
+                            "season": None,
+                            "episode": None,
+                            "unpack_files": [],
                         },
                     }
         except Exception as e:

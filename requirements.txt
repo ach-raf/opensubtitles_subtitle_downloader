@@ -5,3 +5,4 @@ ffsubsync
 thefuzz
 pyyaml
 rich
+rarfile  # optional: needed only for the rare SubSource .rar uploads (falls back to 7z otherwise)

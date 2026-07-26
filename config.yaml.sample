@@ -1,5 +1,5 @@
 general:
-  preferred_backend: ask # Options: opensubtitles, subdl, auto, ask, auto is not yet implemented in a meaningful way
+  preferred_backend: ask # Options: opensubtitles, subdl, subsource, auto, ask
   skip_interactive_menu: false # Options: true, false
   sync_audio_to_subs: ask # Options: true, false, ask
   auto_selection: false
@@ -18,6 +18,14 @@ opensubtitles:
 
 subdl:
   api_key: subdl_api_key
+  languages:
+    English: en
+    Arabic: ar
+    French: fr
+    Japanese: ja
+
+subsource:
+  api_key: subsource_api_key # sk_... from your SubSource profile page
   languages:
     English: en
     Arabic: ar

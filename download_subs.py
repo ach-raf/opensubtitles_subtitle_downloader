@@ -8,6 +8,7 @@ from rich.table import Table
 from rich import print as rprint
 import library.OpenSubtitles as OpenSubtitles
 from library.SubDL import SubDL
+from library.SubSource import SubSource
 import requests
 
 console = Console()
@@ -16,6 +17,7 @@ console = Console()
 class SubtitleBackend(Enum):
     OPENSUBTITLES = "opensubtitles"
     SUBDL = "subdl"
+    SUBSOURCE = "subsource"
     AUTO = "auto"
     ASK = "ask"
 
@@ -25,6 +27,7 @@ class SubtitleDownloader:
         self.config = self._read_config_file(config_path)
         self.opensubtitles_client = None
         self.subdl_client = None
+        self.subsource_client = None
         self.console = Console()
 
     def _read_config_file(self, file_path: str) -> Dict:
@@ -72,13 +75,30 @@ class SubtitleDownloader:
                 console.print(f"[bold red]Error: Missing key in subdl config: {e}[/]")
                 sys.exit(1)
 
+    def _init_subsource(self):
+        if self.subsource_client is None:
+            try:
+                self.subsource_client = SubSource(
+                    self.config["subsource"]["api_key"],
+                    sync_audio_to_subs=self.config["general"].get(
+                        "sync_audio_to_subs", False
+                    ),
+                    hearing_impaired=False,
+                    auto_select=self.config["general"].get("auto_selection", False),
+                )
+            except KeyError as e:
+                console.print(
+                    f"[bold red]Error: Missing key in subsource config: {e}[/]"
+                )
+                sys.exit(1)
+
     def _choose_backend(
         self, media_paths: List[str], preferred_backend: SubtitleBackend
     ) -> SubtitleBackend:
         if preferred_backend == SubtitleBackend.ASK:
             return self._ask_backend()
         elif preferred_backend == SubtitleBackend.AUTO:
-            # Check API availability
+            # Check APIavailability
             opensubtitles_available = self._check_api_availability(
                 "https://api.opensubtitles.com/api/v1/login"
             )
@@ -86,17 +106,21 @@ class SubtitleDownloader:
                 "https://api.subdl.com/api/v2/me",
                 headers={"Authorization": f"Bearer {self.config['subdl']['api_key']}"},
             )
+            subsource_available = self._check_api_availability(
+                "https://api.subsource.net/api/v1/movies/search?searchType=text&q=test",
+                headers={"X-API-Key": self.config["subsource"]["api_key"]},
+            )
 
-            if opensubtitles_available and subdl_available:
-                # Implement more sophisticated logic here if both are available
-                return SubtitleBackend.OPENSUBTITLES
+            # Prefer an explicit backend, then OpenSubtitles, SubDL, SubSource.
+            if subsource_available:
+                return SubtitleBackend.SUBSOURCE
             elif opensubtitles_available:
                 return SubtitleBackend.OPENSUBTITLES
             elif subdl_available:
                 return SubtitleBackend.SUBDL
             else:
                 console.print(
-                    "[bold red]Error: Both OpenSubtitles and SubDL APIs are unavailable.[/]"
+                    "[bold red]Error: All subtitle APIs are unavailable.[/]"
                 )
                 return None  # Indicate failure
 
@@ -111,34 +135,48 @@ class SubtitleDownloader:
             return False
 
     def _ask_backend(self) -> SubtitleBackend:
+        # Interactive list of concrete (non-meta) backends + Auto.
+        options = [
+            (
+                SubtitleBackend.OPENSUBTITLES,
+                "OpenSubtitles",
+                "Extensive database, good for movies and TV shows",
+            ),
+            (
+                SubtitleBackend.SUBDL,
+                "SubDL",
+                "Alternative source, sometimes better for specific content",
+            ),
+            (
+                SubtitleBackend.SUBSOURCE,
+                "SubSource",
+                "Community source with per-season TV organization",
+            ),
+            (SubtitleBackend.AUTO, "Auto", "Let the program decide based on availability"),
+        ]
+
         table = Table(show_header=True, header_style="bold magenta")
         table.add_column("#", style="cyan", width=4)
         table.add_column("Service", style="green")
         table.add_column("Description", style="yellow")
 
-        table.add_row(
-            "1", "OpenSubtitles", "Extensive database, good for movies and TV shows"
-        )
-        table.add_row(
-            "2", "SubDL", "Alternative source, sometimes better for specific content"
-        )
-        table.add_row("3", "Auto", "Let the program decide based on various factors")
+        for i, (_backend, name, desc) in enumerate(options, start=1):
+            table.add_row(str(i), name, desc)
 
         self.console.print(table)
 
         while True:
-            choice = self.console.input("[bold cyan]Select service (1-3):[/] ")
+            choice = self.console.input(
+                f"[bold cyan]Select service (1-{len(options)}):[/] "
+            )
             try:
                 choice_num = int(choice)
-                if 1 <= choice_num <= 3:
-                    return [
-                        SubtitleBackend.OPENSUBTITLES,
-                        SubtitleBackend.SUBDL,
-                        SubtitleBackend.AUTO,
-                    ][choice_num - 1]
+                if 1 <= choice_num <= len(options):
+                    return options[choice_num - 1][0]
                 else:
                     self.console.print(
-                        "[bold red]Please enter a number between 1 and 3[/]"
+                        f"[bold red]Please enter a number between 1 and "
+                        f"{len(options)}[/]"
                     )
             except ValueError:
                 self.console.print("[bold red]Please enter a valid number[/]")
@@ -174,6 +212,17 @@ class SubtitleDownloader:
                 self.subdl_client.process_media_list(media_paths, language)
             else:
                 console.print("[bold red]SubDL client initialization failed.[/]")
+        elif chosen_backend == SubtitleBackend.SUBSOURCE:
+            self._init_subsource()
+            self.console.print(
+                f"[bold blue]Using SubSource backend for {len(media_paths)} files[/]"
+            )
+            if self.subsource_client:
+                self.subsource_client.process_media_list(media_paths, language)
+            else:
+                console.print(
+                    "[bold red]SubSource client initialization failed.[/]"
+                )
         else:
             console.print("[bold red]Invalid backend selected.[/]")
 
@@ -210,6 +259,8 @@ class SubtitleDownloader:
             languages = self.config.get("opensubtitles", {}).get("languages", {})
         elif backend == SubtitleBackend.SUBDL:
             languages = self.config.get("subdl", {}).get("languages", {})
+        elif backend == SubtitleBackend.SUBSOURCE:
+            languages = self.config.get("subsource", {}).get("languages", {})
         else:
             languages = self.config.get("opensubtitles", {}).get("languages", {})
 
@@ -245,24 +296,18 @@ def main():
 
     if downloader.config.get("general", {}).get("skip_interactive_menu", False):
         backend = downloader._get_backend_from_config()
-        if backend == SubtitleBackend.OPENSUBTITLES:
-            language = (
-                list(
-                    downloader.config.get("opensubtitles", {})
-                    .get("languages", {})
-                    .values()
-                )[0]
-                if downloader.config.get("opensubtitles", {}).get("languages")
-                else ""
-            )
+        # Pick the language block matching the configured backend.
+        if backend == SubtitleBackend.SUBDL:
+            source_section = "subdl"
+        elif backend == SubtitleBackend.SUBSOURCE:
+            source_section = "subsource"
         else:
-            language = (
-                list(downloader.config.get("subdl", {}).get("languages", {}).values())[
-                    0
-                ]
-                if downloader.config.get("subdl", {}).get("languages")
-                else ""
-            )
+            # OPENSUBTITLES, AUTO, ASK all fall back to the opensubtitles languages.
+            source_section = "opensubtitles"
+        languages_map = (
+            downloader.config.get(source_section, {}).get("languages", {}) or {}
+        )
+        language = list(languages_map.values())[0] if languages_map else ""
         if not language:
             console.print("[bold red]Error: No languages defined in config.[/]")
             sys.exit(1)
