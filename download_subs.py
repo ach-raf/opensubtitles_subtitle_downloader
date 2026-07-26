@@ -401,7 +401,12 @@ def main() -> None:
         sys.exit(1)
 
     overrides = {"lang": args.lang, "backend": args.backend}
-    run_tui(config=config, media_paths=media_paths, overrides=overrides)
+    run_tui(
+        config=config,
+        media_paths=media_paths,
+        overrides=overrides,
+        config_path=CONFIG_FILE_PATH,
+    )
 
 
 if __name__ == "__main__":

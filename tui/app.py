@@ -59,6 +59,7 @@ from tui.widgets.detail_pane import DetailPane
 from tui.widgets.overlays.engine_switcher import EngineSwitcher
 from tui.widgets.overlays.lang_popover import LanguagePopover
 from tui.widgets.overlays.palette import Palette
+from tui.widgets.overlays.post_download_toast import PostAction, PostDownloadToast
 from tui.widgets.query_bar import QueryBar
 from tui.widgets.results_table import ResultsTable
 from tui.widgets.status_bar import StatusBar
@@ -109,6 +110,7 @@ class SubsApp(App):
         config: Optional[dict] = None,
         media_paths: Optional[List[str]] = None,
         overrides: Optional[dict] = None,
+        config_path: Optional[str] = None,
     ) -> None:
         super().__init__()
         self.config: Dict[str, Any] = config or {}
@@ -123,7 +125,7 @@ class SubsApp(App):
         self.search_worker = SearchWorker(self.config)
         self.download_worker = DownloadWorker(self.config)
         self.health_probe = HealthProbe(self.config)
-        self.config_path: Optional[str] = None
+        self.config_path: Optional[str] = config_path
         # The command palette indexes this; rebuilt on mount + when languages
         # / engines change so dynamic actions stay current.
         self.keymap = Keymap()
@@ -503,10 +505,109 @@ class SubsApp(App):
         if row is None:
             self._notify("No row to download.", severity="warning")
             return
-        # Phase 4 wires the real DownloadWorker + toast. Phase 3 logs intent.
-        release = (row.get("attributes", {}) or {}).get("release", "")
-        logger.info("download requested for: %s", release)
-        self._notify(f"Would download: {release} (Phase 4 wires the worker)")
+        if not self.media_paths:
+            self._notify("No media file to download for.", severity="warning")
+            return
+        media_path = self.media_paths[0]
+        # Mark the queue item as downloading.
+        for item in self.queue:
+            if item.path == media_path:
+                item.status = "downloading"
+                item.chosen = row
+        self.run_download(media_path, row)
+
+    @work(thread=True, exclusive=False, name="download")
+    def run_download(self, media_path: str, chosen: dict) -> None:
+        """Download the chosen subtitle off-thread; mount the toast on success.
+
+        Failures are surfaced via a notification + an amber/red toast so the UI
+        never crashes (spec §12).
+        """
+        state = self._snapshot_state()
+        try:
+            result = self.download_worker.download(state, media_path, chosen)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("download failed")
+            self.call_from_thread(
+                self._notify, f"Download failed: {exc}", "error"
+            )
+            self._mark_queue(media_path, "failed", str(exc))
+            return
+
+        if not result.downloaded:
+            self.call_from_thread(
+                self._notify,
+                f"Download failed: {result.error or 'unknown error'}",
+                "error",
+            )
+            self._mark_queue(media_path, "failed", result.error)
+            return
+
+        # Mount the post-download toast with the result + current sync policy.
+        self.call_from_thread(self._show_post_download_toast, result, media_path)
+
+    def _show_post_download_toast(self, result, media_path: str) -> None:
+        toast = PostDownloadToast(
+            result=result,
+            audio_sync_policy=self.run_policy.audio_sync,
+        )
+        self.push_screen(toast, lambda choice: self._on_post_choice(result, media_path, choice))
+
+    def _on_post_choice(self, result, media_path: str, choice) -> None:
+        """Run the chosen postprocessing and record the HistoryEntry."""
+        if choice is None:
+            # Skipped (esc) — still record a 'done, no post' entry.
+            entry = self.download_worker.postprocess(result, do_clean=False, do_sync=False)
+            self.history.append(entry)
+            self._mark_queue(media_path, "done")
+            return
+
+        action, pinned, auto = choice
+        # If the user pinned a default, write it back to config (spec §6.4 'A').
+        if pinned:
+            self._pin_sync_default(action)
+
+        entry = self.download_worker.postprocess(
+            result, do_clean=action.do_clean, do_sync=action.do_sync
+        )
+        self.history.append(entry)
+        self._mark_queue(media_path, "done")
+        # Surface the outcome.
+        if entry.sync_skipped:
+            self._notify(f"{result.release}: sync skipped (no ffs)", severity="warning")
+        elif entry.error:
+            self._notify(f"{result.release}: {entry.error}", severity="warning")
+        else:
+            tag = "cleaned+synced" if (entry.cleaned and entry.synced) else (
+                "cleaned" if entry.cleaned else ("synced" if entry.synced else "saved")
+            )
+            self._notify(f"{result.release}: {tag}")
+
+    def _pin_sync_default(self, action: "PostAction") -> None:
+        """Pin the chosen action as the new audio-sync default + persist to config."""
+        new_policy = "always" if action.do_sync else "never"
+        new_run = copy.copy(self.run_policy)
+        new_run.audio_sync = new_policy
+        self.run_policy = new_run
+        # Persist back to config.yaml if we know the path.
+        if self.config_path:
+            try:
+                from tui.services import ConfigIO
+
+                ConfigIO.save(self._snapshot_state_for_config(), self.config_path)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("pin default save failed: %s", exc)
+
+    def _snapshot_state_for_config(self) -> "AppState":
+        return self._snapshot_state()
+
+    def _mark_queue(self, media_path: str, status: str, error: Optional[str] = None) -> None:
+        for item in self.queue:
+            if item.path == media_path:
+                item.status = status
+                if error:
+                    item.error = error
+        self._refresh_status()
 
     def _notify(self, message: str, severity: str = "information") -> None:
         """Surface a one-line message. Uses Textual's toast when available."""
@@ -536,11 +637,17 @@ def run_tui(
     config: Optional[dict] = None,
     media_paths: Optional[List[str]] = None,
     overrides: Optional[dict] = None,
+    config_path: Optional[str] = None,
 ) -> None:
     """Launch the Textual app full-screen.
 
     Kept as a free function so ``download_subs.py`` can call it without
     importing the ``App`` class directly.
     """
-    app = SubsApp(config=config, media_paths=media_paths, overrides=overrides)
+    app = SubsApp(
+        config=config,
+        media_paths=media_paths,
+        overrides=overrides,
+        config_path=config_path,
+    )
     app.run()
