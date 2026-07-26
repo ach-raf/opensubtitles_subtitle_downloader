@@ -1,15 +1,22 @@
 """SubsApp — the Textual command deck.
 
 Phase 2 wires the §01 main screen to real state: TopBar, QueryBar, ResultsTable,
-DetailPane, StatusBar. The App owns the source-of-truth state as Textual
-``reactive`` attributes; mutating them re-renders the affected widgets via the
-``watch_*`` hooks. A ``@work`` SearchWorker runs the first media-path search on
-mount without blocking the UI.
+DetailPane, StatusBar. Phase 3 adds the live overlays: language popover (L),
+engine switcher (B), command palette (⌘K / Ctrl+K), merge toggle (m),
+re-probe (r). The App owns the source-of-truth state as Textual ``reactive``
+attributes; mutating them re-renders the affected widgets via the ``watch_*``
+hooks. A ``@work`` SearchWorker runs the first media-path search on mount
+without blocking the UI.
 
-Keyboard (Phase 2 scope):
+Keyboard:
     j / k       move cursor in the results table
-    Enter       download the cursor row (Phase 4 wires the real worker; Phase 2 logs intent)
+    Enter       download the cursor row (Phase 4 wires the real worker)
     /           focus the query input
+    L           open the language popover (scope-confirm if a batch is in flight)
+    B           open the engine switcher (live health + latency)
+    m           toggle merge mode (fan out to all engines)
+    r           re-probe engine health + latency
+    ⌘K / Ctrl+K open the command palette
     q           quit
 
 Multilingual names render via UTF-8 (spec §11); the App sets no special encoding
@@ -18,6 +25,7 @@ because Textual is UTF-8 by default and relies on the terminal font.
 
 from __future__ import annotations
 
+import copy
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -29,6 +37,7 @@ from textual.containers import Container
 from textual.reactive import reactive
 from textual.widgets import Static
 
+from tui.keymap import Keymap
 from tui.services import (
     ConfigIO,
     DownloadWorker,
@@ -36,6 +45,8 @@ from tui.services import (
     SearchWorker,
 )
 from tui.state import (
+    HI_POLICY_VALUES,
+    SYNC_POLICY_VALUES,
     AppState,
     Backend,
     EngineHealth,
@@ -45,6 +56,9 @@ from tui.state import (
     native_name,
 )
 from tui.widgets.detail_pane import DetailPane
+from tui.widgets.overlays.engine_switcher import EngineSwitcher
+from tui.widgets.overlays.lang_popover import LanguagePopover
+from tui.widgets.overlays.palette import Palette
 from tui.widgets.query_bar import QueryBar
 from tui.widgets.results_table import ResultsTable
 from tui.widgets.status_bar import StatusBar
@@ -70,6 +84,9 @@ class SubsApp(App):
         Binding("slash", "focus_query", "Filter", show=False),
         Binding("L", "open_language", "Language", show=False),
         Binding("B", "open_engine", "Engine", show=False),
+        Binding("m", "toggle_merge", "Merge", show=False),
+        Binding("r", "reprobe", "Re-probe", show=False),
+        Binding("ctrl+k", "open_palette", "Palette", show=False),
     ]
 
     # ---- Source-of-truth reactives (Phase 2 subset) -----------------------
@@ -107,6 +124,9 @@ class SubsApp(App):
         self.download_worker = DownloadWorker(self.config)
         self.health_probe = HealthProbe(self.config)
         self.config_path: Optional[str] = None
+        # The command palette indexes this; rebuilt on mount + when languages
+        # / engines change so dynamic actions stay current.
+        self.keymap = Keymap()
 
     # ---- Lifecycle --------------------------------------------------------
     def on_mount(self) -> None:
@@ -115,6 +135,7 @@ class SubsApp(App):
         if self.media_paths:
             for p in self.media_paths:
                 self.queue.append(QueueItem(path=p, name=Path(p).stem))
+        self._rebuild_keymap()
         self._refresh_all_widgets()
         # Default focus on the results table so j/k work immediately; '/' jumps
         # to the query input.
@@ -122,6 +143,8 @@ class SubsApp(App):
             self.query_one(ResultsTable).focus()
         except Exception:  # noqa: BLE001
             pass
+        # Probe engine health in the background so the badges populate.
+        self.run_health_probe(force=False)
         if self.media_paths:
             self.run_search(self.media_paths[0])
 
@@ -332,18 +355,155 @@ class SubsApp(App):
             pass
 
     def action_open_language(self) -> None:
-        # Phase 3 wires the language popover; Phase 2 no-ops with a log.
-        logger.info("open_language requested (Phase 3)")
+        """Push the language popover. Applies with scope-confirm if a batch is in flight."""
+        remaining = [it.path for it in self.queue if not it.is_done()]
+        needs_confirm = len(remaining) > 1
+        popover = LanguagePopover(
+            languages=self.languages,
+            current=self.language,
+            needs_scope_confirm=needs_confirm,
+            remaining_files=remaining,
+        )
+        self.push_screen(popover, self._on_language_chosen)
+
+    def _on_language_chosen(self, result) -> None:
+        """Apply the chosen (code, scope) from the language popover."""
+        if not result:
+            return
+        code, scope = result
+        # Persist any newly-added code into the session language map.
+        if code not in self.languages:
+            self.languages[code] = native_name(code)
+        self.language = code
+        self._rebuild_keymap()
+
+        # If a batch is in flight and scope is "all", update every remaining
+        # queue item so they fetch in the new language.
+        if scope == "all":
+            for item in self.queue:
+                if not item.is_done():
+                    item.status = "queued"
+
+        # Re-search the current file in the new language.
+        self._research_current()
 
     def action_open_engine(self) -> None:
-        logger.info("open_engine requested (Phase 3)")
+        """Push the engine switcher."""
+        screen = EngineSwitcher(
+            current=self.backend,
+            health=self.engine_health,
+            merge_mode=self.merge_mode,
+        )
+        self.push_screen(screen, self._on_engine_chosen)
+
+    def _on_engine_chosen(self, result) -> None:
+        if result is None:
+            # Even on cancel, pick up any merge-mode toggle the user did in-screen.
+            return
+        backend: Backend = result
+        if backend == self.backend:
+            return
+        self.backend = backend
+        self._research_current()
+
+    def action_open_palette(self) -> None:
+        """Push the ⌘K command palette."""
+        self._rebuild_keymap()
+        self.push_screen(Palette(self.keymap), self._on_palette_run)
+
+    def _on_palette_run(self, action) -> None:
+        from tui.keymap import Action
+
+        if not isinstance(action, Action) or action.run is None:
+            return
+        try:
+            action.run(self)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("palette action %s failed", action.id)
+            self._notify(f"{action.label} failed: {exc}", severity="error")
+
+    def action_toggle_merge(self) -> None:
+        self.merge_mode = not self.merge_mode
+
+    def action_reprobe(self) -> None:
+        self.action_reprobe_engines()
+
+    def action_reprobe_engines(self) -> None:
+        """Re-probe every engine's health off-thread."""
+        self.run_health_probe(force=True)
+
+    # ---- Policy toggles (used by the palette + future Config tab) ---------
+    def _toggle_policy(self, field: str) -> None:
+        new_policy = copy.copy(self.run_policy)
+        setattr(new_policy, field, not getattr(new_policy, field))
+        new_policy.validate()
+        self.run_policy = new_policy
+        self._refresh_status()
+
+    def _cycle_sync_policy(self) -> None:
+        idx = SYNC_POLICY_VALUES.index(self.run_policy.audio_sync)
+        new_policy = copy.copy(self.run_policy)
+        new_policy.audio_sync = SYNC_POLICY_VALUES[(idx + 1) % len(SYNC_POLICY_VALUES)]
+        self.run_policy = new_policy
+        self._refresh_status()
+
+    def _cycle_hi_policy(self) -> None:
+        idx = HI_POLICY_VALUES.index(self.run_policy.hearing_impaired)
+        new_policy = copy.copy(self.run_policy)
+        new_policy.hearing_impaired = HI_POLICY_VALUES[(idx + 1) % len(HI_POLICY_VALUES)]
+        self.run_policy = new_policy
+        self._refresh_status()
+
+    # ---- Keymap (dynamic actions) ----------------------------------------
+    def _rebuild_keymap(self) -> None:
+        """Rebuild the palette registry, adding per-language + per-engine actions."""
+        from tui.keymap import Action, default_actions
+
+        actions = default_actions()
+        # One action per configured language.
+        for code, name in self.languages.items():
+            actions.append(
+                Action(
+                    id=f"lang.set.{code}",
+                    label=f"Set language: {name} ({code})",
+                    category="setting",
+                    run=lambda app, c=code: (
+                        setattr(app, "language", c),
+                        app._research_current(),
+                    ),
+                )
+            )
+        # One action per concrete engine.
+        from tui.state import CONCRETE_BACKENDS
+
+        for be in CONCRETE_BACKENDS:
+            actions.append(
+                Action(
+                    id=f"engine.set.{be.value}",
+                    label=f"Use engine: {be.label}",
+                    category="engine",
+                    run=lambda app, b=be: (
+                        setattr(app, "backend", b),
+                        app._research_current(),
+                    ),
+                )
+            )
+        self.keymap.actions = actions
+
+    def _research_current(self) -> None:
+        """Re-run the search for the current (first non-done) media file."""
+        current = next((it.path for it in self.queue if not it.is_done()), None)
+        if current is None and self.media_paths:
+            current = self.media_paths[0]
+        if current:
+            self.run_search(current)
 
     def action_download_cursor(self) -> None:
         row = self.current_result()
         if row is None:
             self._notify("No row to download.", severity="warning")
             return
-        # Phase 4 wires the real DownloadWorker + toast. Phase 2 logs intent.
+        # Phase 4 wires the real DownloadWorker + toast. Phase 3 logs intent.
         release = (row.get("attributes", {}) or {}).get("release", "")
         logger.info("download requested for: %s", release)
         self._notify(f"Would download: {release} (Phase 4 wires the worker)")
@@ -354,6 +514,22 @@ class SubsApp(App):
             self.notify(message, severity=severity, timeout=3)
         except Exception:  # noqa: BLE001
             logger.info("notify: %s", message)
+
+    # ---- Health probe worker ---------------------------------------------
+    @work(thread=True, exclusive=True, name="health")
+    def run_health_probe(self, force: bool = False) -> None:
+        try:
+            health = self.health_probe.probe(force=force)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("health probe failed: %s", exc)
+            return
+        self.call_from_thread(self._apply_health, health)
+
+    def _apply_health(self, health: Dict[str, EngineHealth]) -> None:
+        # Merge into the reactive so watch_engine_health fires a refresh.
+        merged = dict(self.engine_health)
+        merged.update(health)
+        self.engine_health = merged
 
 
 def run_tui(
