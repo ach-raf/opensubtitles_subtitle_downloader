@@ -1,9 +1,9 @@
-# SubSource.py is a class that handles subtitle search and download from the SubSource API.
+# Handles subtitle search and download through the SubSource API.
 # API docs: https://subsource.net/api-docs (base: https://api.subsource.net/api/v1)
 #
 # Key API differences from SubDL (verified against the live API):
 #   - Authentication uses the `X-API-Key` header (not Bearer).
-#   - Language filtering takes full names ("english", "arabic", ...) rather than ISO codes.
+#   - Language filtering takes full names rather than ISO codes.
 #   - Movie search is `searchType=text&q=...` or `searchType=imdb&imdb=tt...`.
 #   - A TV series has a SEPARATE movieId per season (e.g. Breaking Bad S2 != S3), so TV
 #     lookup must resolve the target season to its movieId via movie search.
@@ -11,20 +11,22 @@
 #     unpack_files / single-file path, so download_single_subtitle always goes through
 #     _download_zip and uses filename-based season/episode matching.
 #   - `releaseInfo` is a list of release names; we join them for scoring.
-import requests
-import zipfile
-import subprocess
-import shutil
 import os
-from pathlib import Path
 import re
+import shutil
+import subprocess
+import zipfile
+from contextlib import suppress
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import requests
+from rich import print as rprint
 from rich.console import Console
 from rich.table import Table
-from rich import print as rprint
-from library.subtitle_utils import SubtitleUtils
-from dataclasses import dataclass
-from typing import List, Dict, Any, Optional, Tuple
 
+from library.subtitle_utils import SubtitleUtils
 
 # Map ISO-639-1 codes used elsewhere in this project to SubSource's full language names.
 # SubSource filters by full name (e.g. "english"), not by code ("en").
@@ -70,8 +72,8 @@ SUBSOURCE_LANGUAGE_MAP = {
 
 @dataclass
 class SearchResult:
-    subtitles: List[Dict[str, Any]]
-    metadata_results: List[Dict[str, Any]]
+    subtitles: list[dict[str, Any]]
+    metadata_results: list[dict[str, Any]]
 
 
 class _SevenZipArchive:
@@ -115,7 +117,6 @@ class _SevenZipArchive:
 
 
 class SubSource:
-
     def __init__(
         self,
         api_key,
@@ -131,20 +132,25 @@ class SubSource:
         self.console = Console()
         self.subtitle_utils = SubtitleUtils()
         self.standardize_subtitle_objects = None
+        self._last_request_error = None
 
     # ------------------------------------------------------------------ #
     # HTTP / parsing helpers
     # ------------------------------------------------------------------ #
     def _request(self, path, params):
         """GET a v1 endpoint with the X-API-Key header and return parsed JSON."""
-        response = requests.get(
-            self.api_base_url + path,
-            params=params,
-            headers={"X-API-Key": self.api_key},
-            timeout=10,
-        )
-        response.raise_for_status()
-        return response.json()
+        try:
+            response = requests.get(
+                self.api_base_url + path,
+                params=params,
+                headers={"X-API-Key": self.api_key},
+                timeout=10,
+            )
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as exc:
+            self._last_request_error = exc
+            raise
 
     def _get_raw(self, url):
         """GET an absolute URL (download) with the X-API-Key header."""
@@ -188,7 +194,7 @@ class SubSource:
     # ------------------------------------------------------------------ #
     def movie_search(
         self, query="", imdb_id="", search_type="text", limit=10
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Resolve a title/imdb to movie records via /movies/search.
 
         Returns ALL movieIds for a series (one per season) so the caller can pick
@@ -289,7 +295,7 @@ class SubSource:
     # ------------------------------------------------------------------ #
     def _resolve_movie_ids(
         self, media_name, video_season, video_episode
-    ) -> List[Tuple[int, Optional[int]]]:
+    ) -> list[tuple[int, int | None]]:
         """Return a list of (movieId, season) pairs relevant to this media.
 
         SubSource assigns a distinct movieId per season, so for TV we resolve the
@@ -297,9 +303,7 @@ class SubSource:
         seasons if we can't find the exact one).
         """
         # Try a title (series/film name) search first.
-        series_match = re.search(
-            r"(.+?)(?:\s-\sS\d{2}E\d{2}|\s-\s\d{4})", media_name
-        )
+        series_match = re.search(r"(.+?)(?:\s-\sS\d{2}E\d{2}|\s-\s\d{4})", media_name)
         query = series_match.group(1) if series_match else media_name
 
         movies = self.movie_search(query=query, search_type="text", limit=30)
@@ -308,7 +312,7 @@ class SubSource:
         if not movies:
             return []
 
-        results: List[Tuple[int, Optional[int]]] = []
+        results: list[tuple[int, int | None]] = []
         seen = set()
         for m in movies:
             mid = m.get("movieId")
@@ -333,16 +337,17 @@ class SubSource:
             results = [
                 (m.get("movieId"), m.get("season"))
                 for m in movies
-                if m.get("movieId") and (m.get("type") or "").lower() in ("tvseries", "tv")
+                if m.get("movieId")
+                and (m.get("type") or "").lower() in ("tvseries", "tv")
             ]
             results = list({(mid, s) for mid, s in results})
 
         return results
 
-    def _gather_candidates(self, path, language) -> List[Dict[str, Any]]:
+    def _gather_candidates(self, path, language) -> list[dict[str, Any]]:
         """Resolve movie ids, fetch subtitles for each, then dedupe by subtitle id."""
         media_name = path.stem
-        subs: List[Dict[str, Any]] = []
+        subs: list[dict[str, Any]] = []
 
         video_season, video_episode = self.subtitle_utils.extract_season_and_episode(
             media_name
@@ -389,6 +394,17 @@ class SubSource:
 
         # dedupe by subtitle id
         return list({s["id"]: s for s in subs if s.get("id")}.values())
+
+    def search_candidates(self, path, language, query=""):
+        """Return candidates without selection or download side effects."""
+        self._last_request_error = None
+        search_path = Path(query.strip()) if query.strip() else Path(path)
+        candidates = self._gather_candidates(search_path, language)
+        if not candidates and self._last_request_error is not None:
+            raise RuntimeError(
+                f"SubSource search request failed: {self._last_request_error}"
+            )
+        return candidates
 
     # ------------------------------------------------------------------ #
     # Download
@@ -454,7 +470,7 @@ class SubSource:
                         "RAR archives require the 'rarfile' Python package "
                         "(pip install rarfile) or a '7z' executable on PATH / "
                         "in C:\\Program Files\\7-Zip."
-                    )
+                    ) from None
                 return _SevenZipArchive(path, sevenz)
         else:
             zf = zipfile.ZipFile(path, "r")
@@ -462,7 +478,13 @@ class SubSource:
             return zf
 
     def _download_archive(
-        self, subtitle, video_input_path, language_choice, video_season, video_episode, is_movie
+        self,
+        subtitle,
+        video_input_path,
+        language_choice,
+        video_season,
+        video_episode,
+        is_movie,
     ):
         """Stream a SubSource download (zip or rar) and extract the best match.
 
@@ -501,7 +523,8 @@ class SubSource:
                 return None
 
             sub_files = [
-                n for n in archive.names()
+                n
+                for n in archive.names()
                 if Path(n).suffix.lower() in (".ass", ".srt", ".ssa", ".vtt", ".sub")
             ]
             if not sub_files:
@@ -559,10 +582,8 @@ class SubSource:
                     )
         finally:
             if archive is not None:
-                try:
+                with suppress(Exception):
                     archive.close()
-                except Exception:
-                    pass
             archive_path.unlink(missing_ok=True)
 
         if selected_subtitle_path is None and not is_movie:
@@ -579,8 +600,8 @@ class SubSource:
             # Parse season/episode from the FILENAME only, not the full path: the
             # single-letter E(\d) pattern in extract_season_and_episode can match
             # substrings inside directory names (e.g. a temp dir ending in 'e07').
-            video_season, video_episode = self.subtitle_utils.extract_season_and_episode(
-                video_input_path.name
+            video_season, video_episode = (
+                self.subtitle_utils.extract_season_and_episode(video_input_path.name)
             )
             is_movie = video_season is None and video_episode is None
 
@@ -590,8 +611,12 @@ class SubSource:
                 )
                 return None
             return self._download_archive(
-                subtitle, video_input_path, language_choice,
-                video_season, video_episode, is_movie,
+                subtitle,
+                video_input_path,
+                language_choice,
+                video_season,
+                video_episode,
+                is_movie,
             )
         except requests.exceptions.RequestException as e:
             self.console.print(f"[bold red]Error downloading subtitle: {e}[/]")
@@ -611,11 +636,12 @@ class SubSource:
     def process_media_file(self, media_path, language_choice, media_name=""):
         try:
             path = Path(media_path)
-            hash = self.subtitle_utils.hashFile(path)
+            self.subtitle_utils.hashFile(path)
             if not media_name:
                 media_name = path.stem
             rprint(
-                f"[cyan]Searching for subtitles for[/cyan] [yellow]{media_name}[/yellow]"
+                "[cyan]Searching for subtitles for[/cyan] "
+                f"[yellow]{media_name}[/yellow]"
             )
             subtitles_list = self._gather_candidates(path, language_choice)
             if not subtitles_list:
@@ -691,7 +717,9 @@ class SubSource:
             info_table.add_row("Subtitle ID", str(sub["id"]))
             info_table.add_row("Language", attrs["language"])
             info_table.add_row("Downloads", str(attrs["download_count"]))
-            info_table.add_row("AI Translated", "Yes" if attrs["ai_translated"] else "No")
+            info_table.add_row(
+                "AI Translated", "Yes" if attrs["ai_translated"] else "No"
+            )
             info_table.add_row(
                 "Machine Translated", "Yes" if attrs["machine_translated"] else "No"
             )

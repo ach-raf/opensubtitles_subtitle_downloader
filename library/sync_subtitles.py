@@ -1,12 +1,6 @@
-import subprocess
-import sys
-import os
 import shutil
-from tarfile import SUPPORTED_TYPES
+import subprocess
 from pathlib import Path
-
-
-CURRENT_DIR_PATH = os.path.dirname(os.path.realpath(__file__))
 
 
 def sync_subs_srt(_reference_srt, _unsync_srt, _output):
@@ -24,15 +18,15 @@ def sync_subs_srt(_reference_srt, _unsync_srt, _output):
 def sync_subs_audio(media_path, subtitle_path):
     media_path = Path(media_path)
     subtitle_path = Path(subtitle_path)
-    current_extension = "srt"
-    if os.path.exists(Path(media_path.parent, f"{media_path.stem}.ass")):
-        current_extension = "ass"
 
     media_path = media_path.resolve()
     subtitle_path = subtitle_path.resolve()
     # using subsync library to do the magic
+    executable = shutil.which("ffs")
+    if executable is None:
+        raise RuntimeError("ffsubsync executable 'ffs' is not available")
     _command = [
-        "ffs",
+        executable,
         f"{media_path}",  # path to the video
         "-i",
         f"{subtitle_path}",  # the subtitle for input, using the same name as the film + .srt
@@ -42,8 +36,9 @@ def sync_subs_audio(media_path, subtitle_path):
         "utf-8",
     ]  # encoding
 
-    subprocess.call(_command)
+    subprocess.run(_command, check=True)
     print(f"{subtitle_path.absolute()} synced!")
+    return True
 
 
 if __name__ == "__main__":

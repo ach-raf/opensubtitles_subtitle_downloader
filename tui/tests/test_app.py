@@ -1,175 +1,374 @@
-"""Smoke tests for the Phase 2 main screen using Textual's run_test harness.
-
-These drive the real SubsApp with a mocked SearchWorker so no network/backend
-is touched. They lock in: composition of all five widgets, the reactive
-results -> table -> detail-pane flow, j/k cursor navigation, and the
-multilingual render path.
-"""
-
-from __future__ import annotations
-
 import asyncio
 
 import pytest
+from textual.widgets import ContentSwitcher, Input, Static
 
-from tui.app import SubsApp
-from tui.widgets.detail_pane import DetailPane
-from tui.widgets.query_bar import QueryBar
+from tui.app import ConfirmConfigExit, ConfirmConfigSave, ConfirmQuit, SubsApp
+from tui.domain import Candidate, EngineMode, Provider, QueueStatus
+from tui.search import CoordinatedSearchResult
+from tui.widgets.overlays.engine_switcher import EngineSwitcher
+from tui.widgets.overlays.lang_popover import LanguagePopover
 from tui.widgets.results_table import ResultsTable
-from tui.widgets.status_bar import StatusBar
-from tui.widgets.topbar import TopBar
+from tui.widgets.views import ConfigView
 
 
-def _row(rid: str, release: str, **attr_overrides):
-    attrs = {
-        "release": release,
-        "language": "en",
-        "download_count": 10,
-        "moviehash_match": False,
-        "ai_translated": False,
-        "machine_translated": False,
-    }
-    attrs.update(attr_overrides)
-    return {"id": rid, "attributes": attrs}
+class FakeCoordinator:
+    def __init__(self, candidates):
+        self.candidates = candidates
+        self.requests = []
+
+    def concrete(self, provider, request):
+        self.requests.append(request)
+        return CoordinatedSearchResult(
+            candidates=list(self.candidates),
+            attempted=[provider],
+            selected_provider=provider,
+        )
+
+    def auto(self, request, health=None):
+        self.requests.append(request)
+        return CoordinatedSearchResult(candidates=list(self.candidates))
+
+    def merge(self, request, health=None):
+        self.requests.append(request)
+        return CoordinatedSearchResult(candidates=list(self.candidates))
 
 
-@pytest.fixture()
-def app_with_fake_search(monkeypatch):
-    """Build a SubsApp whose SearchWorker returns canned results."""
-
-    canned = [
-        _row("1", "Inception.2010.1080p.BluRay", download_count=48000, moviehash_match=True),
-        _row("2", "Inception.2010.BluRay.Remux", download_count=22000),
-        _row("3", "Inception.2010.1080p.HUN", download_count=9000, ai_translated=True, machine_translated=True),
+@pytest.fixture
+def configured_app(tmp_path):
+    media = tmp_path / "الهيبة.S01E03.mkv"
+    media.touch()
+    candidates = [
+        Candidate(
+            provider=Provider.SUBDL,
+            provider_id="1",
+            release="الهيبة - S01E03 WEB-DL",
+            language="ar",
+            download_count=2400,
+            score=94,
+        ),
+        Candidate(
+            provider=Provider.SUBDL,
+            provider_id="2",
+            release="Al Hayba S01E03",
+            language="ar",
+            score=81,
+        ),
     ]
+    coordinator = FakeCoordinator(candidates)
+    app = SubsApp(
+        config={
+            "general": {
+                "preferred_backend": "subdl",
+                "skip_interactive_menu": True,
+            },
+            "subdl": {
+                "api_key": "configured",
+                "languages": {"Arabic": "ar", "English": "en"},
+            },
+        },
+        media_paths=[str(media)],
+        overrides={},
+        coordinator=coordinator,
+    )
+    return app, coordinator
 
-    def fake_search(self, state, media_path, engine=None):
-        for i, r in enumerate(canned):
-            r["_score"] = [96.0, 81.0, 64.0][i]
-            r["_source"] = "opensubtitles"
-        return list(canned)
 
-    monkeypatch.setattr("tui.services.SearchWorker.search", fake_search)
-    # Avoid the real HealthProbe touching the network on mount probes.
-    monkeypatch.setattr(
-        "tui.services.HealthProbe.probe", lambda self, force=False, only=None: {}
+def test_all_four_tabs_are_real_views(configured_app):
+    app, _ = configured_app
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause(0.2)
+            for key, view in (
+                ("1", "search"),
+                ("2", "queue"),
+                ("3", "history"),
+                ("4", "config"),
+            ):
+                await pilot.press(key)
+                await pilot.pause()
+                assert app.state.active_view == view
+                assert (
+                    app.query_one("#workspace", ContentSwitcher).current
+                    == f"{view}-view"
+                )
+
+    asyncio.run(run())
+
+
+def test_lowercase_engine_and_language_shortcuts_open_choices(configured_app):
+    app, _ = configured_app
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause(0.2)
+            await pilot.press("b")
+            await pilot.pause()
+            assert isinstance(app.screen, EngineSwitcher)
+            await pilot.press("escape")
+            await pilot.pause()
+            await pilot.press("l")
+            await pilot.pause()
+            assert isinstance(app.screen, LanguagePopover)
+
+    asyncio.run(run())
+
+
+def test_query_submit_uses_edited_value(configured_app):
+    app, coordinator = configured_app
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause(0.2)
+            await pilot.press("slash")
+            query = app.query_one("#query-input", Input)
+            query.value = "Director Cut"
+            await pilot.press("enter")
+            await pilot.pause(0.2)
+            assert app.last_search_request.query == "Director Cut"
+            assert coordinator.requests[-1].query == "Director Cut"
+
+    asyncio.run(run())
+
+
+def test_results_and_multilingual_detail_are_visible(configured_app):
+    app, _ = configured_app
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause(0.3)
+            assert app.query_one(ResultsTable).row_count == 2
+            assert "الهيبة" in app.query_one("#detail-title", Static).content
+
+    asyncio.run(run())
+
+
+def test_cursor_navigation_updates_typed_selection(configured_app):
+    app, _ = configured_app
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause(0.3)
+            assert app.current_candidate().provider is Provider.SUBDL
+            await pilot.press("j")
+            await pilot.pause()
+            assert app.cursor_index == 1
+            assert app.current_candidate().provider_id == "2"
+
+    asyncio.run(run())
+
+
+def test_narrow_terminal_hides_detail_without_hiding_results(configured_app):
+    app, _ = configured_app
+
+    async def run():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause(0.2)
+            assert app.query_one("#detail-panel").display is False
+            assert app.query_one(ResultsTable).display is True
+
+    asyncio.run(run())
+
+
+def test_stale_search_completion_cannot_replace_current_results(configured_app):
+    app, _ = configured_app
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause(0.2)
+            current = list(app.candidates)
+            app._search_finished(
+                app.state.active_item.key,
+                app.search_generation - 1,
+                app.last_search_request,
+                CoordinatedSearchResult(candidates=[]),
+            )
+            assert app.candidates == current
+
+    asyncio.run(run())
+
+
+def test_auto_selection_uses_best_visible_candidate(configured_app):
+    app, _ = configured_app
+    calls = []
+    app.application_config.general.auto_selection = True
+    app.action_download_cursor = lambda: calls.append(app.current_candidate().key)
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause(0.3)
+            assert calls == ["subdl:1"]
+
+    asyncio.run(run())
+
+
+def test_provider_failure_marks_item_failed_and_advances(tmp_path):
+    first = tmp_path / "first.mkv"
+    second = tmp_path / "second.mkv"
+    first.touch()
+    second.touch()
+    fallback = Candidate(
+        provider=Provider.SUBDL,
+        provider_id="next",
+        release="second",
+        language="en",
     )
 
-    app = SubsApp(config={}, media_paths=["Inception.2010.1080p.mkv"], overrides={})
-    return app, canned
+    class FailThenSucceedCoordinator(FakeCoordinator):
+        def concrete(self, provider, request):
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                return CoordinatedSearchResult(
+                    errors={provider: "service unavailable"},
+                )
+            return CoordinatedSearchResult(candidates=[fallback])
 
-
-def test_main_screen_mounts_all_widgets(app_with_fake_search):
-    app, _ = app_with_fake_search
+    coordinator = FailThenSucceedCoordinator([])
+    app = SubsApp(
+        config={
+            "general": {
+                "preferred_backend": "subdl",
+                "skip_interactive_menu": True,
+            },
+            "subdl": {
+                "api_key": "configured",
+                "languages": {"English": "en"},
+            },
+        },
+        media_paths=[str(first), str(second)],
+        overrides={},
+        coordinator=coordinator,
+    )
 
     async def run():
         async with app.run_test() as pilot:
-            await pilot.pause(0.3)
-            assert app.query_one(TopBar) is not None
-            assert app.query_one(QueryBar) is not None
-            assert app.query_one(ResultsTable) is not None
-            assert app.query_one(DetailPane) is not None
-            assert app.query_one(StatusBar) is not None
+            await pilot.pause(0.4)
+            assert app.state.queue[0].status is QueueStatus.FAILED
+            assert app.state.queue[0].error == ("SubDL: service unavailable")
+            assert app.state.active_item.path == second
+            assert app.state.active_item.status is QueueStatus.AWAITING_PICK
+            assert len(coordinator.requests) >= 2
 
     asyncio.run(run())
 
 
-def test_search_worker_fills_results_table(app_with_fake_search):
-    app, canned = app_with_fake_search
+def test_quit_with_unfinished_queue_requires_confirmation(configured_app):
+    app, _ = configured_app
 
     async def run():
         async with app.run_test() as pilot:
-            # The on_mount hook kicks off a search; let the worker complete.
-            await pilot.pause(0.5)
-            assert len(app.results) == 3
-            table = app.query_one(ResultsTable)
-            assert table.row_count == 3
-            # Sorted by score desc -> row 1 is the hash-match 96.
-            assert "Inception.2010.1080p.BluRay" in str(app.results[0])
+            await pilot.pause(0.2)
+            app.action_request_quit()
+            await pilot.pause()
+            assert isinstance(app.screen, ConfirmQuit)
 
     asyncio.run(run())
 
 
-def test_cursor_navigation_updates_detail_pane(app_with_fake_search):
-    app, _ = app_with_fake_search
+def test_config_draft_survives_refresh_and_blocks_accidental_navigation(
+    configured_app,
+):
+    app, _ = configured_app
 
     async def run():
         async with app.run_test() as pilot:
-            await pilot.pause(0.5)
-            detail = app.query_one(DetailPane)
-            # Cursor starts on row 0.
-            assert app.cursor_index == 0
-            first = detail.query_one("#detail-title").content
-            # Move down twice.
-            await pilot.press("j")
-            await pilot.pause(0.1)
-            await pilot.press("j")
-            await pilot.pause(0.1)
-            assert app.cursor_index == 2
-            third = detail.query_one("#detail-title").content
-            assert first != third
-            # Up once.
-            await pilot.press("k")
-            await pilot.pause(0.1)
-            assert app.cursor_index == 1
+            await pilot.pause(0.2)
+            await pilot.press("4")
+            ads = app.query_one("#config-ads", Input)
+            ads.value = "draft-ads.txt"
+            original_engine = app.state.engine_mode
+            original_language = app.state.language
+            app._engine_chosen((EngineMode.AUTO, False))
+            app._language_provider_scope = {Provider.SUBDL}
+            app._language_chosen(("fr", "all"))
+            await pilot.pause()
+            assert app.query_one(ConfigView).dirty is True
+            assert app.state.engine_mode is original_engine
+            assert app.state.language == original_language
+            assert app.config_draft.general.preferred_backend is EngineMode.AUTO
+            assert app.config_draft_language == "fr"
+
+            app.notice = "background update"
+            app._refresh_all()
+            assert ads.value == "draft-ads.txt"
+
+            await pilot.press("1")
+            assert app.state.active_view == "config"
+            assert isinstance(app.screen, ConfirmConfigExit)
+
+            await pilot.press("d")
+            await pilot.pause()
+            assert app.query_one(ConfigView).dirty is False
+            assert ads.value == ""
+            assert app.state.active_view == "search"
+            assert app.state.engine_mode is original_engine
+            assert app.state.language == original_language
+            assert app.application_config.general.preferred_backend is original_engine
 
     asyncio.run(run())
 
 
-def test_multilingual_release_renders(monkeypatch):
-    """Arabic/CJK release names must reach the detail pane intact (spec §11)."""
-    canned = [_row("1", "الهيبة - S01E03", language="ar")]
-
-    def fake_search(self, state, media_path, engine=None):
-        canned[0]["_score"] = 90.0
-        canned[0]["_source"] = "opensubtitles"
-        return list(canned)
-
-    monkeypatch.setattr("tui.services.SearchWorker.search", fake_search)
-    monkeypatch.setattr("tui.services.HealthProbe.probe", lambda self, force=False, only=None: {})
-
-    app = SubsApp(config={}, media_paths=["الهيبة.mkv"], overrides={})
+def test_confirmed_config_save_applies_engine_and_language_draft(
+    configured_app,
+):
+    app, coordinator = configured_app
 
     async def run():
         async with app.run_test() as pilot:
-            await pilot.pause(0.5)
-            detail = app.query_one(DetailPane)
-            content = detail.query_one("#detail-title").content
-            assert "الهيبة" in content
+            await pilot.pause(0.2)
+            await pilot.press("4")
+            app._engine_chosen((EngineMode.AUTO, False))
+            app._language_provider_scope = {Provider.SUBDL}
+            app._language_chosen(("fr", "all"))
 
-    asyncio.run(run())
+            await pilot.press("ctrl+s")
+            await pilot.pause()
+            assert isinstance(app.screen, ConfirmConfigSave)
+            assert app.state.engine_mode is not EngineMode.AUTO
+            assert app.state.language != "fr"
 
-
-def test_enter_on_row_triggers_download_intent(app_with_fake_search):
-    """Phase 2: Enter surfaces a 'would download' notification, doesn't crash."""
-    app, _ = app_with_fake_search
-
-    async def run():
-        async with app.run_test() as pilot:
-            await pilot.pause(0.5)
             await pilot.press("enter")
-            await pilot.pause(0.3)
-            # No exception means the action handled the no-worker case.
+            await pilot.pause()
+            assert app.state.engine_mode is EngineMode.AUTO
+            assert app.state.language == "fr"
+            assert app.application_config.general.preferred_backend is EngineMode.AUTO
+            assert (
+                "fr"
+                in app.application_config.providers[Provider.SUBDL].languages.values()
+            )
+            assert coordinator.requests[-1].language == "fr"
+            assert len(coordinator.requests) >= 2
 
     asyncio.run(run())
 
 
-def test_search_exception_is_contained(monkeypatch):
-    """A backend failure must surface as last_error, not crash the UI."""
+def test_failed_config_write_keeps_live_state_and_dirty_draft(
+    configured_app,
+    tmp_path,
+):
+    app, _ = configured_app
+    app.config_path = tmp_path / "config.yaml"
 
-    def boom(self, state, media_path, engine=None):
-        raise RuntimeError("network down")
+    def fail_save(_draft):
+        raise PermissionError("read-only")
 
-    monkeypatch.setattr("tui.services.SearchWorker.search", boom)
-    monkeypatch.setattr("tui.services.HealthProbe.probe", lambda self, force=False, only=None: {})
-
-    app = SubsApp(config={}, media_paths=["x.mkv"], overrides={})
+    app.config_repository.save = fail_save
 
     async def run():
         async with app.run_test() as pilot:
-            await pilot.pause(0.5)
-            # App is still alive; error recorded.
-            assert app.last_error is not None
-            assert "network down" in app.last_error
+            await pilot.pause(0.2)
+            original_engine = app.state.engine_mode
+            await pilot.press("4")
+            app._engine_chosen((EngineMode.AUTO, False))
+            await pilot.press("ctrl+s")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert app.state.engine_mode is original_engine
+            assert app.application_config.general.preferred_backend is original_engine
+            assert app.query_one(ConfigView).dirty is True
+            assert "Could not save configuration" in app.last_error
 
     asyncio.run(run())

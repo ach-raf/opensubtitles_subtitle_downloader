@@ -1,17 +1,17 @@
-# OpenSubtitles.py is a class that handles subtitle search and download from opensubtitles API.
-import requests
+# Handles subtitle search and download through the OpenSubtitles API.
 import json
-
+import re
 from pathlib import Path
+
+import requests
+from rich import print as rprint
 from rich.console import Console
 from rich.table import Table
-from rich import print as rprint
+
 from library.subtitle_utils import SubtitleUtils
-import re
 
 
 class OpenSubtitles:
-
     def __init__(
         self,
         username,
@@ -111,6 +111,29 @@ class OpenSubtitles:
             self.console.print(f"[bold red]Unexpected error during search: {e}[/]")
             return None
 
+    def search_candidates(self, path, language, query=""):
+        """Return raw candidates for a non-interactive caller.
+
+        Unlike the legacy interactive flow, a failed request raises so callers
+        can distinguish provider failure from a valid empty result.
+        """
+        media_path = Path(path)
+        media_hash = ""
+        if media_path.is_file():
+            try:
+                media_hash = self.subtitle_utils.hashFile(media_path) or ""
+            except (OSError, ValueError):
+                media_hash = ""
+        effective_query = query.strip() or media_path.stem
+        results = self.search(
+            media_hash=media_hash,
+            media_name=effective_query,
+            languages=language,
+        )
+        if results is None:
+            raise RuntimeError("OpenSubtitles search request failed")
+        return results
+
     def get_download_link(self, selected_subtitles):
         url = "https://api.opensubtitles.com/api/v1/download"
         headers = {
@@ -169,7 +192,8 @@ class OpenSubtitles:
             if not media_name:
                 media_name = path.stem
             rprint(
-                f"[cyan]Searching for subtitles for[/cyan] [yellow]{media_name}[/yellow]"
+                "[cyan]Searching for subtitles for[/cyan] "
+                f"[yellow]{media_name}[/yellow]"
             )
             subtitle_path = Path(path.parent, f"{path.stem}.{language_choice}.srt")
             results = self.search(
@@ -180,7 +204,8 @@ class OpenSubtitles:
             else:
                 rprint(f"[green]Found {len(results)} results[/green]")
 
-            # parse series name and search for subtitles by series name alone series name exapmle: "The Flash 2014", "Dune - Prophecy (2024) - S01E01 - - The Hidden Hand [AMZN WEBDL-1080p][8bit][h264][EAC3 5.1]-playWEB"
+            # Parse the series name and search by that alone. This also handles
+            # long release names that include season, episode, and codec tags.
             series_name = re.search(
                 r"(.+?)(?:\s-\sS\d{2}E\d{2}|\s-\s\d{4})", media_name
             )
@@ -188,7 +213,8 @@ class OpenSubtitles:
             if series_name:
                 series_name = series_name.group(1)
                 rprint(
-                    f"[cyan]Searching for subtitles for series[/cyan] [yellow]{series_name}[/yellow]"
+                    "[cyan]Searching for subtitles for series[/cyan] "
+                    f"[yellow]{series_name}[/yellow]"
                 )
                 temp_results = self.search(
                     media_hash=hash, media_name=series_name, languages=language_choice
@@ -196,7 +222,9 @@ class OpenSubtitles:
                 if temp_results:
                     results.extend(temp_results)
                     rprint(
-                        f"[blue]Adding more results by searching for[/blue] [yellow]{series_name}[/yellow], [green]found {len(temp_results)} results[/green]"
+                        "[blue]Adding more results by searching for[/blue] "
+                        f"[yellow]{series_name}[/yellow], "
+                        f"[green]found {len(temp_results)} results[/green]"
                     )
 
             # Add more results using alternate names
@@ -211,7 +239,9 @@ class OpenSubtitles:
                     if temp_results:
                         results.extend(temp_results)
                         rprint(
-                            f"[blue]Adding more results by searching for[/blue] [yellow]{term}[/yellow], [green]found {len(temp_results)} results[/green]"
+                            "[blue]Adding more results by searching for[/blue] "
+                            f"[yellow]{term}[/yellow], "
+                            f"[green]found {len(temp_results)} results[/green]"
                         )
 
             if not results:
@@ -243,7 +273,8 @@ class OpenSubtitles:
                 return False
 
             rprint(
-                f"[green]>> Downloading {language_choice} subtitles for {media_path}[/green]"
+                f"[green]>> Downloading {language_choice} subtitles for "
+                f"{media_path}[/green]"
             )
             self.print_subtitle_info(selected_sub)
             if not self.save_subtitle(download_link, subtitle_path):
@@ -272,17 +303,20 @@ class OpenSubtitles:
                             result = self.process_media_file(file, language_choice)
                             if not result:
                                 self.console.print(
-                                    f"[bold yellow]Warning: Could not find subtitles for {file}[/]"
+                                    "[bold yellow]Warning: Could not find "
+                                    f"subtitles for {file}[/]"
                                 )
                 elif self.subtitle_utils.check_if_media_file(path):
                     result = self.process_media_file(path, language_choice)
                     if not result:
                         self.console.print(
-                            f"[bold yellow]Warning: Could not find subtitles for {path}[/]"
+                            "[bold yellow]Warning: Could not find subtitles "
+                            f"for {path}[/]"
                         )
             except Exception as e:
                 self.console.print(
-                    f"[bold red]Unexpected error processing media list item {media_path}: {e}[/]"
+                    "[bold red]Unexpected error processing media list item "
+                    f"{media_path}: {e}[/]"
                 )
 
     def print_subtitle_info(self, sub):

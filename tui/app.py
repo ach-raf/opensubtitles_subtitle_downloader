@@ -1,778 +1,1282 @@
-"""SubsApp — the Textual command deck.
-
-Phase 2 wires the §01 main screen to real state: TopBar, QueryBar, ResultsTable,
-DetailPane, StatusBar. Phase 3 adds the live overlays: language popover (L),
-engine switcher (B), command palette (⌘K / Ctrl+K), merge toggle (m),
-re-probe (r). The App owns the source-of-truth state as Textual ``reactive``
-attributes; mutating them re-renders the affected widgets via the ``watch_*``
-hooks. A ``@work`` SearchWorker runs the first media-path search on mount
-without blocking the UI.
-
-Keyboard:
-    j / k       move cursor in the results table
-    Enter       download the cursor row (Phase 4 wires the real worker)
-    /           focus the query input
-    L           open the language popover (scope-confirm if a batch is in flight)
-    B           open the engine switcher (live health + latency)
-    m           toggle merge mode (fan out to all engines)
-    r           re-probe engine health + latency
-    ⌘K / Ctrl+K open the command palette
-    q           quit
-
-Multilingual names render via UTF-8 (spec §11); the App sets no special encoding
-because Textual is UTF-8 by default and relies on the terminal font.
-"""
+"""Production Textual command deck for multi-provider subtitle workflows."""
 
 from __future__ import annotations
 
 import copy
-import logging
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from textual import work
+from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container
+from textual.containers import Horizontal, Vertical
+from textual.css.query import NoMatches
 from textual.reactive import reactive
 from textual.screen import ModalScreen
-from textual.widgets import Static
+from textual.widgets import (
+    Button,
+    ContentSwitcher,
+    DataTable,
+    Input,
+    Select,
+    Static,
+    Switch,
+)
 
-from tui.keymap import Keymap
-from tui.services import (
-    ConfigIO,
-    DownloadWorker,
-    HealthProbe,
-    SearchWorker,
+from tui.config import (
+    ApplicationConfig,
+    ConfigDiff,
+    ConfigRepository,
+    normalize_sync_policy,
 )
-from tui.state import (
-    HI_POLICY_VALUES,
-    SYNC_POLICY_VALUES,
-    AppState,
-    Backend,
-    EngineHealth,
+from tui.domain import (
+    Candidate,
+    EngineMode,
+    HealthResult,
     HistoryEntry,
+    Provider,
     QueueItem,
-    RunPolicy,
-    native_name,
+    QueueStatus,
+    SearchRequest,
 )
-from tui.widgets.config_tab import ConfigTab
-from tui.widgets.detail_pane import DetailPane
+from tui.jobs import JobCoordinator
+from tui.keymap import Action, Keymap
+from tui.media import expand_media_paths
+from tui.providers import create_adapters
+from tui.search import CoordinatedSearchResult, SearchCoordinator
+from tui.state import SessionState, native_name
 from tui.widgets.overlays.engine_switcher import EngineSwitcher
 from tui.widgets.overlays.lang_popover import LanguagePopover
 from tui.widgets.overlays.palette import Palette
-from tui.widgets.overlays.post_download_toast import PostAction, PostDownloadToast
 from tui.widgets.query_bar import QueryBar
 from tui.widgets.results_table import ResultsTable
 from tui.widgets.status_bar import StatusBar
 from tui.widgets.topbar import TopBar
+from tui.widgets.views import ConfigView, HistoryView, QueueView, SearchView
 
-logger = logging.getLogger("tui.app")
+MEDIA_EXTENSIONS = {"avi", "m4v", "mkv", "mov", "mp4", "ts", "webm"}
 
-_CSS_PATH = "style.tcss"
 
-
-class SubsApp(App):
-    """The subtitle downloader command deck."""
-
-    CSS_PATH = _CSS_PATH
-
-    BINDINGS = [
-        Binding("q", "quit", "Quit", show=True),
-        Binding("j", "cursor_down", "Down", show=False),
-        Binding("k", "cursor_up", "Up", show=False),
-        Binding("down", "cursor_down", "Down", show=False),
-        Binding("up", "cursor_up", "Up", show=False),
-        Binding("enter", "download_cursor", "Download", show=False),
-        Binding("slash", "focus_query", "Filter", show=False),
-        Binding("L", "open_language", "Language", show=False),
-        Binding("B", "open_engine", "Engine", show=False),
-        Binding("m", "toggle_merge", "Merge", show=False),
-        Binding("r", "reprobe", "Re-probe", show=False),
-        Binding("ctrl+k", "open_palette", "Palette", show=False),
-        Binding("4", "open_config", "Config", show=False),
-    ]
-
-    # ---- Source-of-truth reactives (Phase 2 subset) -----------------------
-    # These mirror AppState fields 1:1. Later phases add more (history tab,
-    # config tab) without renaming these.
-    backend: reactive[Backend] = reactive(Backend.OPENSUBTITLES, layout=False)
-    language: reactive[str] = reactive("en", layout=False)
-    merge_mode: reactive[bool] = reactive(False, layout=False)
-    run_policy: reactive[RunPolicy] = reactive(RunPolicy, layout=False)
-    query: reactive[str] = reactive("", layout=False)
-    results: reactive[List[dict]] = reactive(list, layout=False)
-    scores: reactive[Dict[str, float]] = reactive(dict, layout=False)
-    cursor_index: reactive[int] = reactive(0, layout=False)
-    engine_health: reactive[Dict[str, EngineHealth]] = reactive(dict, layout=False)
-    last_error: reactive[Optional[str]] = reactive(None, layout=False)
-    searching: reactive[bool] = reactive(False, layout=False)
-
-    def __init__(
-        self,
-        config: Optional[dict] = None,
-        media_paths: Optional[List[str]] = None,
-        overrides: Optional[dict] = None,
-        config_path: Optional[str] = None,
-    ) -> None:
-        super().__init__()
-        self.config: Dict[str, Any] = config or {}
-        self.media_paths: List[str] = list(media_paths or [])
-        self.overrides: Dict[str, Any] = overrides or {}
-        self.history: List[HistoryEntry] = []
-        # Plain (non-reactive) queue; Phase 2 only ever has the first file.
-        self.queue: List[QueueItem] = []
-        self.languages: Dict[str, str] = {"en": "English"}
-
-        # Services — constructed from config. They import library/* lazily.
-        self.search_worker = SearchWorker(self.config)
-        self.download_worker = DownloadWorker(self.config)
-        self.health_probe = HealthProbe(self.config)
-        self.config_path: Optional[str] = config_path
-        # The command palette indexes this; rebuilt on mount + when languages
-        # / engines change so dynamic actions stay current.
-        self.keymap = Keymap()
-
-    # ---- Lifecycle --------------------------------------------------------
-    def on_mount(self) -> None:
-        self._seed_from_config()
-        # Seed the queue from media_paths so the StatusBar shows progress.
-        if self.media_paths:
-            for p in self.media_paths:
-                self.queue.append(QueueItem(path=p, name=Path(p).stem))
-        self._rebuild_keymap()
-        self._refresh_all_widgets()
-        # Default focus on the results table so j/k work immediately; '/' jumps
-        # to the query input.
-        try:
-            self.query_one(ResultsTable).focus()
-        except Exception:  # noqa: BLE001
-            pass
-        # Probe engine health in the background so the badges populate.
-        self.run_health_probe(force=False)
-        if self.media_paths:
-            self.run_search(self.media_paths[0])
-
-    def _seed_from_config(self) -> None:
-        """Translate config.yaml into the reactive seed values."""
-        try:
-            policy = ConfigIO.run_policy_from_config(self.config)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("run_policy_from_config failed: %s", exc)
-            policy = RunPolicy()
-        self.run_policy = policy
-
-        try:
-            self.languages = ConfigIO.languages_from_config(self.config)
-        except Exception:  # noqa: BLE001
-            self.languages = {"en": "English"}
-
-        backend = ConfigIO.backend_from_config(
-            self.config, override=self.overrides.get("backend")
-        )
-        self.backend = backend
-
-        lang_override = self.overrides.get("lang")
-        if lang_override:
-            self.language = lang_override.lower()
-        elif self.languages:
-            # Default to the first configured language.
-            self.language = next(iter(self.languages))
-
-    # ---- Compose ----------------------------------------------------------
-    def compose(self) -> ComposeResult:
-        yield TopBar()
-        yield QueryBar()
-        yield Container(
-            Container(
-                Static("[dim]results · sorted by match[/dim]", classes="panel-h", markup=True),
-                ResultsTable(),
-                id="results-panel",
-            ),
-            DetailPane(id="detail-panel"),
-            id="main-split",
-        )
-        yield StatusBar()
-
-    # ---- Helpers exposed to widgets --------------------------------------
-    def current_result(self) -> Optional[dict]:
-        """The result row under the cursor, or None."""
-        if not self.results:
-            return None
-        idx = self.cursor_index
-        if idx < 0 or idx >= len(self.results):
-            return None
-        return self.results[idx]
-
-    def _snapshot_state(self) -> AppState:
-        """Build an ephemeral AppState the services layer can consume."""
-        return AppState(
-            backend=self.backend,
-            language=self.language,
-            merge_mode=self.merge_mode,
-            run_policy=self.run_policy,
-            query=self.query,
-            queue=list(self.queue),
-            cursor_index=self.cursor_index,
-            history=list(self.history),
-            engine_health=dict(self.engine_health),
-            languages=dict(self.languages),
-            results=list(self.results),
-            scores=dict(self.scores),
-            last_error=self.last_error,
-        )
-
-    # ---- Watch hooks: re-render widgets when reactives change ------------
-    def watch_backend(self, _: Backend) -> None:
-        self._refresh_topbar_status()
-
-    def watch_language(self, _: str) -> None:
-        self._refresh_topbar_status()
-
-    def watch_engine_health(self, _: dict) -> None:
-        self._refresh_topbar_status()
-
-    def watch_merge_mode(self, _: bool) -> None:
-        self._refresh_results()
-        self._refresh_status()
-
-    def watch_results(self, _: list) -> None:
-        self._refresh_results()
-        self._refresh_querybar()
-        self._refresh_detail()
-        self._refresh_status()
-
-    def watch_cursor_index(self, _: int) -> None:
-        self._refresh_detail()
-
-    def watch_last_error(self, _: Optional[str]) -> None:
-        self._refresh_status()
-
-    def watch_searching(self, _: bool) -> None:
-        self._refresh_status()
-
-    def watch_run_policy(self, _: RunPolicy) -> None:
-        self._refresh_status()
-
-    # ---- Widget refresh helpers ------------------------------------------
-    def _refresh_all_widgets(self) -> None:
-        for name in (
-            "_refresh_topbar_status",
-            "_refresh_querybar",
-            "_refresh_results",
-            "_refresh_detail",
-            "_refresh_status",
-        ):
-            getattr(self, name)()
-
-    def _refresh_topbar_status(self) -> None:
-        try:
-            self.query_one(TopBar).refresh_from_state(self)
-            self.query_one(StatusBar).refresh_from_state(self)
-        except Exception as exc:  # noqa: BLE001 - pre-mount; skip
-            logger.debug("refresh topbar/status skipped: %s", exc)
-
-    def _refresh_querybar(self) -> None:
-        try:
-            self.query_one(QueryBar).refresh_from_state(self)
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("refresh querybar skipped: %s", exc)
-
-    def _refresh_results(self) -> None:
-        try:
-            self.query_one(ResultsTable).refresh_from_state(self)
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("refresh results skipped: %s", exc)
-
-    def _refresh_detail(self) -> None:
-        try:
-            self.query_one(DetailPane).refresh_from_state(self)
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("refresh detail skipped: %s", exc)
-
-    def _refresh_status(self) -> None:
-        try:
-            self.query_one(StatusBar).refresh_from_state(self)
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("refresh status skipped: %s", exc)
-
-    # ---- Search worker ----------------------------------------------------
-    @work(thread=True, exclusive=True, name="search")
-    def run_search(self, media_path: str) -> None:
-        """Search one media file off-thread; post results back on mutation.
-
-        ``exclusive=True`` cancels any in-flight search when a new one starts
-        (e.g. user changed language/engine mid-search).
-        """
-        self.call_from_thread(self._begin_search, media_path)
-        state = self._snapshot_state()
-        try:
-            results = self.search_worker.search(state, media_path)
-        except Exception as exc:  # noqa: BLE001 - never crash the UI
-            logger.exception("search failed")
-            self.call_from_thread(self._end_search, [], {}, str(exc))
-            return
-        scores = {str(r.get("id")): float(r.get("_score", 0.0)) for r in results}
-        self.call_from_thread(self._end_search, results, scores, state.last_error)
-
-    def _begin_search(self, media_path: str) -> None:
-        self.searching = True
-        if not self.query:
-            self.query = Path(media_path).stem
-        # Mark the queue item as searching for the StatusBar.
-        for item in self.queue:
-            if item.path == media_path:
-                item.status = "searching"
-
-    def _end_search(
-        self,
-        results: List[dict],
-        scores: Dict[str, float],
-        error: Optional[str],
-    ) -> None:
-        self.searching = False
-        self.results = results
-        self.scores = scores
-        self.cursor_index = 0
-        self.last_error = error
-        # Mark the first queue item as awaiting a pick.
-        for item in self.queue:
-            if item.status == "searching":
-                item.status = "awaiting_pick" if results else "queued"
-
-    # ---- Keybindings ------------------------------------------------------
-    def action_cursor_down(self) -> None:
-        if self.focused and self.focused.__class__.__name__ == "Input":
-            return  # let Input handle its own keys
-        if self.results:
-            self.cursor_index = min(self.cursor_index + 1, len(self.results) - 1)
-
-    def action_cursor_up(self) -> None:
-        if self.focused and self.focused.__class__.__name__ == "Input":
-            return
-        if self.cursor_index > 0:
-            self.cursor_index -= 1
-
-    def action_focus_query(self) -> None:
-        try:
-            self.query_one("#query-input").focus()
-        except Exception:  # noqa: BLE001
-            pass
-
-    def action_open_language(self) -> None:
-        """Push the language popover. Applies with scope-confirm if a batch is in flight."""
-        remaining = [it.path for it in self.queue if not it.is_done()]
-        needs_confirm = len(remaining) > 1
-        popover = LanguagePopover(
-            languages=self.languages,
-            current=self.language,
-            needs_scope_confirm=needs_confirm,
-            remaining_files=remaining,
-        )
-        self.push_screen(popover, self._on_language_chosen)
-
-    def _on_language_chosen(self, result) -> None:
-        """Apply the chosen (code, scope) from the language popover."""
-        if not result:
-            return
-        code, scope = result
-        # Persist any newly-added code into the session language map.
-        if code not in self.languages:
-            self.languages[code] = native_name(code)
-        self.language = code
-        self._rebuild_keymap()
-
-        # If a batch is in flight and scope is "all", update every remaining
-        # queue item so they fetch in the new language.
-        if scope == "all":
-            for item in self.queue:
-                if not item.is_done():
-                    item.status = "queued"
-
-        # Re-search the current file in the new language.
-        self._research_current()
-
-    def action_open_engine(self) -> None:
-        """Push the engine switcher."""
-        screen = EngineSwitcher(
-            current=self.backend,
-            health=self.engine_health,
-            merge_mode=self.merge_mode,
-        )
-        self.push_screen(screen, self._on_engine_chosen)
-
-    def _on_engine_chosen(self, result) -> None:
-        if result is None:
-            # Even on cancel, pick up any merge-mode toggle the user did in-screen.
-            return
-        backend: Backend = result
-        if backend == self.backend:
-            return
-        self.backend = backend
-        self._research_current()
-
-    def action_open_palette(self) -> None:
-        """Push the ⌘K command palette."""
-        self._rebuild_keymap()
-        self.push_screen(Palette(self.keymap), self._on_palette_run)
-
-    def _on_palette_run(self, action) -> None:
-        from tui.keymap import Action
-
-        if not isinstance(action, Action) or action.run is None:
-            return
-        try:
-            action.run(self)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("palette action %s failed", action.id)
-            self._notify(f"{action.label} failed: {exc}", severity="error")
-
-    def action_open_config(self) -> None:
-        """Push the Config settings rail."""
-        screen = ConfigTab(
-            policy=self.run_policy,
-            ads_file_path=self.run_policy.ads_file_path,
-        )
-        self.push_screen(screen, self._on_config_result)
-
-    def _on_config_result(self, result) -> None:
-        """Apply the edited RunPolicy, then prompt a one-line diff before save."""
-        if not result or result[0] != "save":
-            return  # cancel
-        new_policy: RunPolicy = result[1]
-        if new_policy is None:
-            return
-        # Compute the diff from the CURRENT (pre-assignment) policy first, so
-        # the comparison actually sees the change.
-        diff = self._config_diff_summary(new_policy)
-
-        # Update the live reactive so the StatusBar mirrors the new settings.
-        self.run_policy = new_policy
-
-        if not diff:
-            self._notify("config.yaml: no changes")
-            return
-        # Confirm modal: writes on yes, cancels on no.
-        self.push_screen(
-            _ConfirmScreen(f"Write to config.yaml?\n[dim]{diff}[/]"),
-            lambda confirmed: self._on_save_confirm(confirmed, new_policy),
-        )
-
-    def _config_diff_summary(self, new_policy: RunPolicy) -> str:
-        """One-line summary of what would change, without touching disk.
-
-        Compares against ``self.run_policy`` (the value BEFORE assignment in the
-        caller), so call this before mutating the reactive.
-        """
-        if not self.config_path:
-            return "(no config path — changes apply this session only)"
-        try:
-            changes: List[str] = []
-            old = self.run_policy
-            if old.force_utf8 != new_policy.force_utf8:
-                changes.append("opt_force_utf8")
-            if old.audio_sync != new_policy.audio_sync:
-                changes.append("sync_audio_to_subs")
-            if old.auto_select != new_policy.auto_select:
-                changes.append("auto_selection")
-            if (old.ads_file_path or "") != (new_policy.ads_file_path or ""):
-                changes.append("ads.file_path")
-            if not changes:
-                return ""
-            return "config.yaml: " + ", ".join(changes)
-        except Exception as exc:  # noqa: BLE001
-            return f"(diff unavailable: {exc})"
-
-    def _on_save_confirm(self, confirmed, new_policy: RunPolicy) -> None:
-        if not confirmed:
-            self._notify("save cancelled")
-            return
-        if not self.config_path:
-            self._notify("changes apply this session only (no config path)")
-            return
-        try:
-            from tui.services import ConfigIO
-
-            snap = self._snapshot_state()
-            snap.run_policy = new_policy
-            summary = ConfigIO.save(snap, self.config_path)
-            self._notify(summary)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("config save failed")
-            self._notify(f"save failed: {exc}", severity="error")
-
-    def action_toggle_merge(self) -> None:
-        self.merge_mode = not self.merge_mode
-
-    def action_reprobe(self) -> None:
-        self.action_reprobe_engines()
-
-    def action_reprobe_engines(self) -> None:
-        """Re-probe every engine's health off-thread."""
-        self.run_health_probe(force=True)
-
-    # ---- Policy toggles (used by the palette + future Config tab) ---------
-    def _toggle_policy(self, field: str) -> None:
-        new_policy = copy.copy(self.run_policy)
-        setattr(new_policy, field, not getattr(new_policy, field))
-        new_policy.validate()
-        self.run_policy = new_policy
-        self._refresh_status()
-
-    def _cycle_sync_policy(self) -> None:
-        idx = SYNC_POLICY_VALUES.index(self.run_policy.audio_sync)
-        new_policy = copy.copy(self.run_policy)
-        new_policy.audio_sync = SYNC_POLICY_VALUES[(idx + 1) % len(SYNC_POLICY_VALUES)]
-        self.run_policy = new_policy
-        self._refresh_status()
-
-    def _cycle_hi_policy(self) -> None:
-        idx = HI_POLICY_VALUES.index(self.run_policy.hearing_impaired)
-        new_policy = copy.copy(self.run_policy)
-        new_policy.hearing_impaired = HI_POLICY_VALUES[(idx + 1) % len(HI_POLICY_VALUES)]
-        self.run_policy = new_policy
-        self._refresh_status()
-
-    # ---- Keymap (dynamic actions) ----------------------------------------
-    def _rebuild_keymap(self) -> None:
-        """Rebuild the palette registry, adding per-language + per-engine actions."""
-        from tui.keymap import Action, default_actions
-
-        actions = default_actions()
-        # One action per configured language.
-        for code, name in self.languages.items():
-            actions.append(
-                Action(
-                    id=f"lang.set.{code}",
-                    label=f"Set language: {name} ({code})",
-                    category="setting",
-                    run=lambda app, c=code: (
-                        setattr(app, "language", c),
-                        app._research_current(),
-                    ),
-                )
-            )
-        # One action per concrete engine.
-        from tui.state import CONCRETE_BACKENDS
-
-        for be in CONCRETE_BACKENDS:
-            actions.append(
-                Action(
-                    id=f"engine.set.{be.value}",
-                    label=f"Use engine: {be.label}",
-                    category="engine",
-                    run=lambda app, b=be: (
-                        setattr(app, "backend", b),
-                        app._research_current(),
-                    ),
-                )
-            )
-        self.keymap.actions = actions
-
-    def _research_current(self) -> None:
-        """Re-run the search for the current (first non-done) media file."""
-        current = next((it.path for it in self.queue if not it.is_done()), None)
-        if current is None and self.media_paths:
-            current = self.media_paths[0]
-        if current:
-            self.run_search(current)
-
-    def action_download_cursor(self) -> None:
-        row = self.current_result()
-        if row is None:
-            self._notify("No row to download.", severity="warning")
-            return
-        if not self.media_paths:
-            self._notify("No media file to download for.", severity="warning")
-            return
-        media_path = self.media_paths[0]
-        # Mark the queue item as downloading.
-        for item in self.queue:
-            if item.path == media_path:
-                item.status = "downloading"
-                item.chosen = row
-        self.run_download(media_path, row)
-
-    @work(thread=True, exclusive=False, name="download")
-    def run_download(self, media_path: str, chosen: dict) -> None:
-        """Download the chosen subtitle off-thread; mount the toast on success.
-
-        Failures are surfaced via a notification + an amber/red toast so the UI
-        never crashes (spec §12).
-        """
-        state = self._snapshot_state()
-        try:
-            result = self.download_worker.download(state, media_path, chosen)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("download failed")
-            self.call_from_thread(
-                self._notify, f"Download failed: {exc}", "error"
-            )
-            self._mark_queue(media_path, "failed", str(exc))
-            return
-
-        if not result.downloaded:
-            self.call_from_thread(
-                self._notify,
-                f"Download failed: {result.error or 'unknown error'}",
-                "error",
-            )
-            self._mark_queue(media_path, "failed", result.error)
-            return
-
-        # Mount the post-download toast with the result + current sync policy.
-        self.call_from_thread(self._show_post_download_toast, result, media_path)
-
-    def _show_post_download_toast(self, result, media_path: str) -> None:
-        toast = PostDownloadToast(
-            result=result,
-            audio_sync_policy=self.run_policy.audio_sync,
-        )
-        self.push_screen(toast, lambda choice: self._on_post_choice(result, media_path, choice))
-
-    def _on_post_choice(self, result, media_path: str, choice) -> None:
-        """Run the chosen postprocessing and record the HistoryEntry."""
-        if choice is None:
-            # Skipped (esc) — still record a 'done, no post' entry.
-            entry = self.download_worker.postprocess(result, do_clean=False, do_sync=False)
-            self.history.append(entry)
-            self._mark_queue(media_path, "done")
-            return
-
-        action, pinned, auto = choice
-        # If the user pinned a default, write it back to config (spec §6.4 'A').
-        if pinned:
-            self._pin_sync_default(action)
-
-        entry = self.download_worker.postprocess(
-            result, do_clean=action.do_clean, do_sync=action.do_sync
-        )
-        self.history.append(entry)
-        self._mark_queue(media_path, "done")
-        # Surface the outcome.
-        if entry.sync_skipped:
-            self._notify(f"{result.release}: sync skipped (no ffs)", severity="warning")
-        elif entry.error:
-            self._notify(f"{result.release}: {entry.error}", severity="warning")
-        else:
-            tag = "cleaned+synced" if (entry.cleaned and entry.synced) else (
-                "cleaned" if entry.cleaned else ("synced" if entry.synced else "saved")
-            )
-            self._notify(f"{result.release}: {tag}")
-
-    def _pin_sync_default(self, action: "PostAction") -> None:
-        """Pin the chosen action as the new audio-sync default + persist to config."""
-        new_policy = "always" if action.do_sync else "never"
-        new_run = copy.copy(self.run_policy)
-        new_run.audio_sync = new_policy
-        self.run_policy = new_run
-        # Persist back to config.yaml if we know the path.
-        if self.config_path:
-            try:
-                from tui.services import ConfigIO
-
-                ConfigIO.save(self._snapshot_state_for_config(), self.config_path)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("pin default save failed: %s", exc)
-
-    def _snapshot_state_for_config(self) -> "AppState":
-        return self._snapshot_state()
-
-    def _mark_queue(self, media_path: str, status: str, error: Optional[str] = None) -> None:
-        for item in self.queue:
-            if item.path == media_path:
-                item.status = status
-                if error:
-                    item.error = error
-        self._refresh_status()
-
-    def _notify(self, message: str, severity: str = "information") -> None:
-        """Surface a one-line message. Uses Textual's toast when available."""
-        try:
-            self.notify(message, severity=severity, timeout=3)
-        except Exception:  # noqa: BLE001
-            logger.info("notify: %s", message)
-
-    # ---- Health probe worker ---------------------------------------------
-    @work(thread=True, exclusive=True, name="health")
-    def run_health_probe(self, force: bool = False) -> None:
-        try:
-            health = self.health_probe.probe(force=force)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("health probe failed: %s", exc)
-            return
-        self.call_from_thread(self._apply_health, health)
-
-    def _apply_health(self, health: Dict[str, EngineHealth]) -> None:
-        # Merge into the reactive so watch_engine_health fires a refresh.
-        merged = dict(self.engine_health)
-        merged.update(health)
-        self.engine_health = merged
-
-
-class _ConfirmScreen(ModalScreen):
-    """Tiny yes/no confirmation modal used by the Config save-back flow."""
-
+class ConfirmReplace(ModalScreen[bool]):
     DEFAULT_CSS = """
-    _ConfirmScreen {
+    ConfirmReplace {
         align: center middle;
+        background: rgba(3, 6, 11, 0.72);
     }
-    _ConfirmScreen > Vertical {
-        width: 60;
-        max-width: 90%;
-        background: #0f131a;
-        border: solid #d9a441;
+    ConfirmReplace > Vertical {
+        width: 58;
+        height: 9;
         padding: 1 2;
-    }
-    _ConfirmScreen #cf-msg {
-        color: #d8dde6;
-        padding: 0 0 1 0;
-    }
-    _ConfirmScreen #cf-foot {
-        color: #6a7280;
+        background: #111820;
+        border: round #e7b96a;
     }
     """
-
     BINDINGS = [
-        Binding("y", "yes", "Yes", show=False),
-        Binding("n", "no", "No", show=False),
-        Binding("escape", "no", "No", show=False),
-        Binding("enter", "yes", "Yes", show=False),
+        Binding("y", "confirm", "Replace", show=False),
+        Binding("n", "cancel", "Keep existing", show=False),
+        Binding("escape", "cancel", "Keep existing", show=False),
     ]
 
-    def __init__(self, message: str) -> None:
+    def __init__(self, path: Path) -> None:
         super().__init__()
-        self._message = message
+        self.path = path
 
     def compose(self) -> ComposeResult:
-        from textual.containers import Vertical
-        yield Vertical(
-            Static(self._message, id="cf-msg", markup=True),
-            Static("[dim][b]y[/b]/↵ confirm   [b]n[/b]/esc cancel[/]", id="cf-foot", markup=True),
-        )
+        with Vertical():
+            yield Static("[b]Subtitle already exists[/b]")
+            yield Static(
+                f"{self.path.name}\n\n"
+                "[b]y[/b] replace atomically   [b]n[/b] keep existing"
+            )
 
-    def action_yes(self) -> None:
+    def action_confirm(self) -> None:
         self.dismiss(True)
 
-    def action_no(self) -> None:
+    def action_cancel(self) -> None:
         self.dismiss(False)
 
 
-def run_tui(
-    config: Optional[dict] = None,
-    media_paths: Optional[List[str]] = None,
-    overrides: Optional[dict] = None,
-    config_path: Optional[str] = None,
-) -> None:
-    """Launch the Textual app full-screen.
+class ConfirmSync(ModalScreen[bool]):
+    DEFAULT_CSS = ConfirmReplace.DEFAULT_CSS
+    BINDINGS = [
+        Binding("y", "confirm", "Sync", show=False),
+        Binding("n", "cancel", "Do not sync", show=False),
+        Binding("escape", "cancel", "Do not sync", show=False),
+    ]
 
-    Kept as a free function so ``download_subs.py`` can call it without
-    importing the ``App`` class directly.
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static("[b]Sync this subtitle to the media audio?[/b]")
+            yield Static(
+                "ffsubsync may take a moment.\n\n"
+                "[b]y[/b] sync now   [b]n[/b] keep original timing"
+            )
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+
+class CandidatePreview(ModalScreen[None]):
+    DEFAULT_CSS = """
+    CandidatePreview {
+        align: center middle;
+        background: rgba(3, 6, 11, 0.72);
+    }
+    CandidatePreview > Vertical {
+        width: 72;
+        max-width: 92%;
+        height: 19;
+        padding: 1 2;
+        background: #111820;
+        border: round #75a7ff;
+    }
     """
-    app = SubsApp(
+    BINDINGS = [
+        Binding("escape", "close", "Close", show=False),
+        Binding("p", "close", "Close", show=False),
+    ]
+
+    def __init__(self, candidate: Candidate) -> None:
+        super().__init__()
+        self.candidate = candidate
+
+    def compose(self) -> ComposeResult:
+        candidate = self.candidate
+        with Vertical():
+            yield Static("[b]Candidate preview[/b]")
+            yield Static(
+                f"\n[b]{candidate.release}[/b]\n\n"
+                f"Provider     {candidate.provider.label}\n"
+                f"Language     {candidate.language.upper()}\n"
+                f"Uploader     {candidate.author}\n"
+                f"Downloads    {candidate.download_count:,}\n"
+                f"Match score  {candidate.score:.0f}\n"
+                f"Hash / HI / AI  "
+                f"{'yes' if candidate.hash_match else 'no'} / "
+                f"{'yes' if candidate.hearing_impaired else 'no'} / "
+                f"{'yes' if candidate.ai_translated else 'no'}\n\n"
+                "[dim]esc or p to close[/dim]"
+            )
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
+class ConfirmQuit(ModalScreen[bool]):
+    DEFAULT_CSS = ConfirmReplace.DEFAULT_CSS
+    BINDINGS = [
+        Binding("y", "confirm", "Quit", show=False),
+        Binding("n", "cancel", "Stay", show=False),
+        Binding("escape", "cancel", "Stay", show=False),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static("[b]Leave the command deck?[/b]")
+            yield Static(
+                "Queued work or unsaved settings may be left unfinished.\n\n"
+                "[b]y[/b] quit   [b]n[/b] stay"
+            )
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+
+class ConfirmConfigSave(ModalScreen[bool]):
+    DEFAULT_CSS = """
+    ConfirmConfigSave {
+        align: center middle;
+        background: rgba(3, 6, 11, 0.72);
+    }
+    ConfirmConfigSave > Vertical {
+        width: 68;
+        max-width: 92%;
+        height: auto;
+        max-height: 80%;
+        padding: 1 2;
+        background: #111820;
+        border: round #e7b96a;
+    }
+    ConfirmConfigSave Horizontal {
+        height: 3;
+        margin-top: 1;
+    }
+    ConfirmConfigSave Button {
+        width: 18;
+        margin-right: 1;
+    }
+    """
+    BINDINGS = [
+        Binding("enter", "confirm", "Save", show=False),
+        Binding("y", "confirm", "Save", show=False),
+        Binding("n", "cancel", "Cancel", show=False),
+        Binding("escape", "cancel", "Cancel", show=False),
+    ]
+
+    def __init__(self, diff: ConfigDiff) -> None:
+        super().__init__()
+        self.diff = diff
+
+    def compose(self) -> ComposeResult:
+        fields = self.diff.changed_fields
+        visible = fields[:10]
+        remaining = len(fields) - len(visible)
+        lines = "\n".join(f"  • {field}" for field in visible)
+        if remaining:
+            lines += f"\n  • …and {remaining} more"
+        with Vertical():
+            yield Static("[b]Save configuration changes?[/b]")
+            yield Static(
+                f"\n{lines}\n\n"
+                "[dim]Only field names are shown; secret values are never "
+                "included.[/dim]"
+            )
+            with Horizontal():
+                yield Button("Save", id="confirm-config-save", variant="primary")
+                yield Button("Cancel", id="cancel-config-save")
+
+    @on(Button.Pressed, "#confirm-config-save")
+    def on_confirm(self) -> None:
+        self.action_confirm()
+
+    @on(Button.Pressed, "#cancel-config-save")
+    def on_cancel(self) -> None:
+        self.action_cancel()
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+
+class ConfirmConfigExit(ModalScreen[str | None]):
+    DEFAULT_CSS = ConfirmConfigSave.DEFAULT_CSS
+    BINDINGS = [
+        Binding("s", "save", "Save", show=False),
+        Binding("d", "discard", "Discard", show=False),
+        Binding("escape", "stay", "Stay", show=False),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static("[b]Unsaved configuration changes[/b]")
+            yield Static(
+                "\nSave the draft, discard it, or stay in Config.\n\n"
+                "[b]s[/b] save   [b]d[/b] discard   [b]esc[/b] stay"
+            )
+            with Horizontal():
+                yield Button("Save", id="exit-config-save", variant="primary")
+                yield Button("Discard", id="exit-config-discard")
+                yield Button("Stay", id="exit-config-stay")
+
+    @on(Button.Pressed)
+    def on_choice(self, event: Button.Pressed) -> None:
+        result = {
+            "exit-config-save": "save",
+            "exit-config-discard": "discard",
+            "exit-config-stay": None,
+        }.get(event.button.id)
+        self.dismiss(result)
+
+    def action_save(self) -> None:
+        self.dismiss("save")
+
+    def action_discard(self) -> None:
+        self.dismiss("discard")
+
+    def action_stay(self) -> None:
+        self.dismiss(None)
+
+
+class SubsApp(App):
+    CSS_PATH = "style.tcss"
+
+    BINDINGS = [
+        Binding("1", "show_view('search')", "Search", show=False),
+        Binding("2", "show_view('queue')", "Queue", show=False),
+        Binding("3", "show_view('history')", "History", show=False),
+        Binding("4", "show_view('config')", "Config", show=False),
+        Binding("b", "open_engine", "Engine", show=False),
+        Binding("B", "open_engine", "Engine", show=False),
+        Binding("l", "open_language", "Language", show=False),
+        Binding("L", "open_language", "Language", show=False),
+        Binding("slash", "focus_query", "Query", show=False),
+        Binding("j", "cursor_down", "Down", show=False),
+        Binding("k", "cursor_up", "Up", show=False),
+        Binding("enter", "download_cursor", "Download", show=False),
+        Binding("p", "preview", "Preview", show=False),
+        Binding("y", "copy_url", "Copy URL", show=False),
+        Binding("m", "toggle_merge", "Merge", show=False),
+        Binding("r", "reprobe", "Re-probe", show=False),
+        Binding("ctrl+k", "open_palette", "Commands", show=False),
+        Binding("ctrl+s", "save_config", "Save config", show=False),
+        Binding("question_mark", "help", "Help", show=False),
+        Binding("q", "request_quit", "Quit", show=False),
+    ]
+
+    candidates: reactive[list[Candidate]] = reactive(list, layout=False)
+    cursor_index: reactive[int] = reactive(0, layout=False)
+    query: reactive[str] = reactive("", layout=False)
+    merge_mode: reactive[bool] = reactive(False, layout=False)
+    searching: reactive[bool] = reactive(False, layout=False)
+    downloading: reactive[bool] = reactive(False, layout=False)
+    last_error: reactive[str | None] = reactive(None, layout=False)
+    notice: reactive[str] = reactive("", layout=False)
+    health: reactive[dict[Provider, HealthResult]] = reactive(
+        dict,
+        layout=False,
+    )
+
+    def __init__(
+        self,
+        config: dict[str, Any] | None = None,
+        media_paths: list[str] | None = None,
+        overrides: dict[str, Any] | None = None,
+        config_path: str | None = None,
+        *,
+        coordinator: SearchCoordinator | None = None,
+        jobs: JobCoordinator | None = None,
+    ) -> None:
+        super().__init__()
+        self.raw_config = copy.deepcopy(config or {})
+        self.overrides = overrides or {}
+        self.config_path = Path(config_path) if config_path else None
+        self.config_repository = ConfigRepository(
+            self.config_path or Path("config.yaml")
+        )
+        if self.config_path and self.config_path.exists():
+            self.application_config = self.config_repository.load()
+        else:
+            self.application_config = ConfigRepository(
+                Path("__missing_config__.yaml")
+            ).load()
+            self._overlay_raw_config(self.raw_config)
+        self._apply_overrides()
+        self.config_draft = copy.deepcopy(self.application_config)
+        self.config_draft_language = ""
+        self._pending_config_draft: ApplicationConfig | None = None
+        self._pending_config_language: str | None = None
+        self._after_config_save: Callable[[], None] | None = None
+
+        expansion = expand_media_paths(media_paths or [], MEDIA_EXTENSIONS)
+        queue = [
+            QueueItem(
+                key=str(path),
+                path=path,
+                language=self._initial_language(),
+                engine_mode=self.application_config.general.preferred_backend,
+            )
+            for path in expansion.paths
+        ]
+        self.media_issues = expansion.issues
+        self.state = SessionState.from_config(self.application_config, queue)
+        if language := self.overrides.get("lang"):
+            self.state.set_language(str(language), scope="remaining")
+        if engine := self.overrides.get("backend"):
+            mode = EngineMode(str(engine))
+            if mode is not EngineMode.ASK:
+                self.state.choose_engine(mode)
+
+        self.adapters = create_adapters(self.application_config)
+        selected_provider = self.state.engine_mode.provider
+        if selected_provider and selected_provider not in self.adapters:
+            self.state.engine_mode = EngineMode.ASK
+            for item in self.state.queue:
+                item.engine_mode = EngineMode.ASK
+        self.coordinator = coordinator or SearchCoordinator(self.adapters)
+        self.jobs = jobs or JobCoordinator(self.adapters)
+        self.keymap = Keymap()
+        self._rebuild_keymap()
+        self.last_search_request: SearchRequest | None = None
+        self._pending_download: Candidate | None = None
+        self.search_generation = 0
+        self._language_provider_scope: set[Provider] = set()
+        self.config_draft_language = self.state.language
+
+    def compose(self) -> ComposeResult:
+        yield TopBar()
+        with ContentSwitcher(initial="search-view", id="workspace"):
+            yield SearchView(id="search-view")
+            yield QueueView(id="queue-view")
+            yield HistoryView(id="history-view")
+            yield ConfigView(id="config-view")
+        yield StatusBar()
+
+    def on_mount(self) -> None:
+        active = self.state.active_item
+        self.query = active.path.stem if active else ""
+        self._refresh_all()
+        if self.media_issues:
+            self.notice = (
+                f"{len(self.media_issues)} input"
+                f"{'s' if len(self.media_issues) != 1 else ''} skipped"
+            )
+        if self.state.needs_engine_setup:
+            self.call_after_refresh(self.action_open_engine)
+        elif self.state.needs_language_setup:
+            self.call_after_refresh(self.action_open_language)
+        elif active:
+            self.call_after_refresh(self.start_search)
+
+    def _overlay_raw_config(self, raw: dict[str, Any]) -> None:
+        general = raw.get("general") or {}
+        for name in (
+            "skip_interactive_menu",
+            "auto_selection",
+            "opt_force_utf8",
+            "no_tui",
+            "hearing_impaired",
+            "show_ai_translated",
+        ):
+            if name in general:
+                setattr(self.application_config.general, name, general[name])
+        if "sync_audio_to_subs" in general:
+            self.application_config.general.sync_audio_to_subs = normalize_sync_policy(
+                general["sync_audio_to_subs"]
+            )
+        if "preferred_backend" in general:
+            try:
+                self.application_config.general.preferred_backend = EngineMode(
+                    str(general["preferred_backend"])
+                )
+            except ValueError:
+                self.application_config.general.preferred_backend = EngineMode.ASK
+        for provider in Provider:
+            values = raw.get(provider.value) or {}
+            self.application_config.providers[provider].values = {
+                key: value for key, value in values.items() if key != "languages"
+            }
+            self.application_config.providers[provider].languages = {
+                str(name): str(code)
+                for name, code in (values.get("languages") or {}).items()
+            }
+        cleaning = raw.get("cleaning_subtitles") or {}
+        self.application_config.cleaning.enabled = bool(cleaning.get("enabled", True))
+        ads = cleaning.get("ads") or {}
+        ads_path = str(ads.get("file_path") or "").strip()
+        self.application_config.cleaning.ads_file_path = (
+            Path(ads_path) if ads_path else None
+        )
+        self.application_config.cleaning.separator = str(ads.get("separator", ","))
+        self.application_config.cleaning.supported_media = list(
+            cleaning.get("supported_media") or []
+        )
+
+    def _apply_overrides(self) -> None:
+        if backend := self.overrides.get("backend"):
+            self.application_config.general.preferred_backend = EngineMode(str(backend))
+        if self.overrides.get("lang"):
+            self.application_config.general.skip_interactive_menu = True
+
+    def _initial_language(self) -> str:
+        if language := self.overrides.get("lang"):
+            return str(language).lower()
+        mode = self.application_config.general.preferred_backend
+        providers = [mode.provider] if mode.provider else list(Provider)
+        for provider in providers:
+            languages = self.application_config.providers[provider].languages
+            if languages:
+                return next(iter(languages.values())).lower()
+        return "en"
+
+    def current_candidate(self) -> Candidate | None:
+        if 0 <= self.cursor_index < len(self.candidates):
+            return self.candidates[self.cursor_index]
+        return None
+
+    def start_search(self) -> None:
+        item = self.state.active_item
+        if item is None or self.state.engine_mode is EngineMode.ASK:
+            return
+        if item.status is not QueueStatus.QUEUED:
+            item.status = QueueStatus.QUEUED
+            item.candidate_keys.clear()
+        request = SearchRequest(
+            media_path=item.path,
+            query=self.query.strip() or item.path.stem,
+            language=item.language,
+            hearing_impaired=self.application_config.general.hearing_impaired,
+            show_ai_translated=(self.application_config.general.show_ai_translated),
+        )
+        self.last_search_request = request
+        self.search_generation += 1
+        self.run_search(
+            item.key,
+            self.search_generation,
+            request,
+            self.state.engine_mode,
+            self.merge_mode,
+        )
+
+    @work(thread=True, exclusive=True, group="search")
+    def run_search(
+        self,
+        item_key: str,
+        generation: int,
+        request: SearchRequest,
+        mode: EngineMode,
+        merge: bool,
+    ) -> None:
+        self.call_from_thread(self._search_started, item_key, generation)
+        if merge:
+            result = self.coordinator.merge(request, self.health)
+        elif mode is EngineMode.AUTO:
+            result = self.coordinator.auto(request, self.health)
+        elif mode.provider:
+            result = self.coordinator.concrete(mode.provider, request)
+        else:
+            result = CoordinatedSearchResult()
+        self.call_from_thread(
+            self._search_finished,
+            item_key,
+            generation,
+            request,
+            result,
+        )
+
+    def _search_started(self, item_key: str, generation: int) -> None:
+        if generation != self.search_generation:
+            return
+        self.searching = True
+        self.last_error = None
+        self.state.begin_search(item_key)
+        self._refresh_queue()
+
+    def _search_finished(
+        self,
+        item_key: str,
+        generation: int,
+        request: SearchRequest,
+        result: CoordinatedSearchResult,
+    ) -> None:
+        active = self.state.active_item
+        if (
+            generation != self.search_generation
+            or active is None
+            or active.key != item_key
+            or request is not self.last_search_request
+        ):
+            return
+        self.searching = False
+        summary = "; ".join(
+            f"{provider.label}: {error}" for provider, error in result.errors.items()
+        )
+        if result.errors and not result.candidates:
+            self.state.mark_failed(item_key, summary)
+            self.candidates = []
+            self.last_error = summary
+            self._advance_queue()
+            return
+        self.state.set_candidates(item_key, result.candidates)
+        self.candidates = result.candidates
+        self.cursor_index = 0
+        if result.errors:
+            self.notice = f"Partial results · {summary}"
+        elif not result.candidates:
+            self.notice = "No subtitles found. Try a broader query or Merge."
+        else:
+            self.notice = f"{len(result.candidates)} candidates ready"
+        self._refresh_all()
+        if result.candidates and self.application_config.general.auto_selection:
+            self.action_download_cursor()
+
+    def action_show_view(self, view: str) -> None:
+        if (
+            view != "config"
+            and self.state.active_view == "config"
+            and self.query_one(ConfigView).dirty
+        ):
+            self.push_screen(
+                ConfirmConfigExit(),
+                lambda decision: self._config_exit_decided(decision, view),
+            )
+            return
+        if view == "config" and self.state.active_view != "config":
+            self.config_draft = copy.deepcopy(self.application_config)
+            self.config_draft_language = self.state.language
+            self.query_one(ConfigView).mark_clean()
+        self._finish_view_change(view)
+
+    def _finish_view_change(self, view: str) -> None:
+        self.state.active_view = view
+        self.query_one("#workspace", ContentSwitcher).current = f"{view}-view"
+        self._refresh_all()
+
+    def _config_exit_decided(self, decision: str | None, view: str) -> None:
+        if decision == "discard":
+            self._discard_config_draft()
+            self._finish_view_change(view)
+        elif decision == "save":
+            self._request_config_save(after_save=lambda: self._finish_view_change(view))
+
+    def action_focus_query(self) -> None:
+        self.action_show_view("search")
+        self.query_one("#query-input", Input).focus()
+
+    def action_cursor_down(self) -> None:
+        if isinstance(self.focused, Input):
+            return
+        if self.candidates:
+            self.cursor_index = min(
+                self.cursor_index + 1,
+                len(self.candidates) - 1,
+            )
+
+    def action_cursor_up(self) -> None:
+        if isinstance(self.focused, Input):
+            return
+        self.cursor_index = max(0, self.cursor_index - 1)
+
+    def action_toggle_merge(self) -> None:
+        self.merge_mode = not self.merge_mode
+        self.notice = (
+            "Merge searches all configured providers"
+            if self.merge_mode
+            else "Merge off"
+        )
+        self._refresh_all()
+
+    def action_reprobe(self) -> None:
+        self.run_health_probe()
+
+    @work(thread=True, exclusive=True, group="health")
+    def run_health_probe(self) -> None:
+        results = {
+            provider: adapter.health() for provider, adapter in self.adapters.items()
+        }
+        self.call_from_thread(self._health_finished, results)
+
+    def _health_finished(
+        self,
+        results: dict[Provider, HealthResult],
+    ) -> None:
+        self.health = results
+        self.notice = "Provider diagnostics refreshed"
+        self._refresh_all()
+
+    def action_open_engine(self) -> None:
+        current = self.state.engine_mode
+        if self.state.active_view == "config":
+            current = self.config_draft.general.preferred_backend
+        self.push_screen(
+            EngineSwitcher(
+                current=current,
+                health=self.health,
+                merge_mode=self.merge_mode,
+                configured=set(self.adapters),
+            ),
+            self._engine_chosen,
+        )
+
+    def _engine_chosen(self, result) -> None:
+        if not result:
+            return
+        mode, merge = result
+        if self.state.active_view == "config":
+            self.config_draft.general.preferred_backend = mode
+            view = self.query_one(ConfigView)
+            view.mark_dirty()
+            view.refresh_from_state(self)
+            return
+        self.merge_mode = merge
+        self.state.choose_engine(mode)
+        self.application_config.general.preferred_backend = mode
+        self._refresh_all()
+        if self.state.needs_language_setup:
+            self.action_open_language()
+        else:
+            self.start_search()
+
+    def action_open_language(self) -> None:
+        mode = self.state.engine_mode
+        config = self.application_config
+        if self.state.active_view == "config":
+            config = self.config_draft
+            mode = config.general.preferred_backend
+        if self.merge_mode or mode in {EngineMode.AUTO, EngineMode.ASK}:
+            provider_scope = set(self.adapters) or set(Provider)
+        else:
+            provider_scope = {mode.provider} if mode.provider else set(Provider)
+        self._language_provider_scope = provider_scope
+        languages: dict[str, str] = {}
+        for provider in provider_scope:
+            provider_config = config.providers[provider]
+            for name, code in provider_config.languages.items():
+                languages.setdefault(code.lower(), name)
+        current_language = (
+            self.config_draft_language
+            if self.state.active_view == "config"
+            else self.state.language
+        )
+        languages.setdefault(current_language, native_name(current_language))
+        remaining = [
+            str(item.path)
+            for item in self.state.queue
+            if item.status
+            not in {QueueStatus.DONE, QueueStatus.FAILED, QueueStatus.SKIPPED}
+        ]
+        self.push_screen(
+            LanguagePopover(
+                languages=languages,
+                current=current_language,
+                needs_scope_confirm=len(remaining) > 1,
+                remaining_files=remaining,
+            ),
+            self._language_chosen,
+        )
+
+    def _language_chosen(self, result) -> None:
+        if not result:
+            return
+        code, scope = result
+        if self.state.active_view == "config":
+            self.config_draft_language = code
+            for provider in self._language_provider_scope:
+                provider_config = self.config_draft.providers[provider]
+                if code not in provider_config.languages.values():
+                    provider_config.languages[native_name(code)] = code
+            view = self.query_one(ConfigView)
+            view.mark_dirty()
+            view.refresh_from_state(self)
+            return
+        normalized_scope = "remaining" if scope == "all" else scope
+        self.state.set_language(code, normalized_scope)
+        for provider in self._language_provider_scope:
+            provider_config = self.application_config.providers[provider]
+            if code not in provider_config.languages.values():
+                provider_config.languages[native_name(code)] = code
+        self._refresh_all()
+        self.start_search()
+
+    def action_open_palette(self) -> None:
+        self._rebuild_keymap()
+        self.push_screen(Palette(self.keymap), self._palette_chosen)
+
+    def _palette_chosen(self, action) -> None:
+        if action and action.run:
+            action.run(self)
+
+    def _rebuild_keymap(self) -> None:
+        actions = Keymap().actions
+        language_codes = {
+            code.lower()
+            for provider in self.application_config.providers.values()
+            for code in provider.languages.values()
+        }
+        for code in sorted(language_codes):
+            actions.append(
+                Action(
+                    f"lang.set.{code}",
+                    f"Set language to {native_name(code)} ({code})",
+                    "language",
+                    run=lambda app, code=code: app._set_language_action(code),
+                )
+            )
+        for provider in Provider:
+            mode = EngineMode(provider.value)
+            actions.append(
+                Action(
+                    f"engine.set.{provider.value}",
+                    f"Use {provider.label}",
+                    "engine",
+                    run=lambda app, mode=mode: app._set_engine_action(mode),
+                )
+            )
+        self.keymap = Keymap(actions)
+
+    def _set_language_action(self, code: str) -> None:
+        self.state.set_language(code)
+        self.start_search()
+
+    def _set_engine_action(self, mode: EngineMode) -> None:
+        self.state.choose_engine(mode)
+        self.application_config.general.preferred_backend = mode
+        self.start_search()
+
+    def action_download_cursor(self) -> None:
+        candidate = self.current_candidate()
+        item = self.state.active_item
+        if candidate is None or item is None or self.downloading:
+            return
+        self._pending_download = candidate
+        self.run_download(item.key, candidate, False)
+
+    def action_copy_url(self) -> None:
+        candidate = self.current_candidate()
+        if candidate is None:
+            return
+        if candidate.public_url is None:
+            self.notice = "This provider has no safe public URL to copy"
+        else:
+            self.copy_to_clipboard(candidate.public_url)
+            self.notice = "Public URL copied"
+        self._refresh_status()
+
+    def action_preview(self) -> None:
+        candidate = self.current_candidate()
+        if candidate:
+            self.push_screen(CandidatePreview(candidate))
+
+    @work(thread=True, exclusive=True, group="download")
+    def run_download(
+        self,
+        item_key: str,
+        candidate: Candidate,
+        overwrite: bool,
+    ) -> None:
+        self.call_from_thread(self._download_started, item_key, candidate.key)
+        item = next(item for item in self.state.queue if item.key == item_key)
+        try:
+            download = self.jobs.download(
+                candidate,
+                item.path,
+                overwrite=overwrite,
+            )
+            sync_policy = self.application_config.general.sync_audio_to_subs
+            if download.succeeded and sync_policy == "ask":
+                self.call_from_thread(
+                    self._request_sync,
+                    item_key,
+                    candidate,
+                    download,
+                )
+                return
+            postprocess = self.jobs.postprocess(
+                download,
+                force_utf8=self.application_config.general.opt_force_utf8,
+                clean=self.application_config.cleaning.enabled,
+                sync=sync_policy == "always",
+                ads_path=self.application_config.cleaning.ads_file_path,
+            )
+        except Exception as exc:
+            self.call_from_thread(
+                self._download_crashed,
+                item_key,
+                f"{type(exc).__name__}: {exc}",
+            )
+            return
+        self.call_from_thread(
+            self._download_finished,
+            item_key,
+            candidate,
+            download,
+            postprocess,
+        )
+
+    def _request_sync(
+        self,
+        item_key: str,
+        candidate: Candidate,
+        download,
+    ) -> None:
+        self.push_screen(
+            ConfirmSync(),
+            lambda confirmed: self.run_postprocess(
+                item_key,
+                candidate,
+                download,
+                confirmed,
+            ),
+        )
+
+    @work(thread=True, exclusive=True, group="postprocess")
+    def run_postprocess(
+        self,
+        item_key: str,
+        candidate: Candidate,
+        download,
+        sync: bool,
+    ) -> None:
+        try:
+            postprocess = self.jobs.postprocess(
+                download,
+                force_utf8=self.application_config.general.opt_force_utf8,
+                clean=self.application_config.cleaning.enabled,
+                sync=sync,
+                ads_path=self.application_config.cleaning.ads_file_path,
+            )
+        except Exception as exc:
+            self.call_from_thread(
+                self._download_crashed,
+                item_key,
+                f"{type(exc).__name__}: {exc}",
+            )
+            return
+        self.call_from_thread(
+            self._download_finished,
+            item_key,
+            candidate,
+            download,
+            postprocess,
+        )
+
+    def _download_started(self, item_key: str, candidate_key: str) -> None:
+        item = next(item for item in self.state.queue if item.key == item_key)
+        if item.status is not QueueStatus.AWAITING_PICK:
+            item.status = QueueStatus.AWAITING_PICK
+        self.state.begin_download(item_key, candidate_key)
+        self.downloading = True
+        self._refresh_all()
+
+    def _download_finished(
+        self,
+        item_key: str,
+        candidate: Candidate,
+        download,
+        postprocess,
+    ) -> None:
+        self.downloading = False
+        if download.conflict_path:
+            item = next(item for item in self.state.queue if item.key == item_key)
+            item.status = QueueStatus.AWAITING_PICK
+            self.push_screen(
+                ConfirmReplace(download.conflict_path),
+                lambda confirmed: self._replace_decided(
+                    confirmed,
+                    item_key,
+                    candidate,
+                ),
+            )
+            self._refresh_all()
+            return
+        if not download.succeeded:
+            self.state.mark_failed(item_key, download.error or "Download failed")
+            self.last_error = download.error
+            self._advance_queue()
+            return
+        history = HistoryEntry(
+            item_key=item_key,
+            media_path=download.media_path,
+            candidate_key=candidate.key,
+            provider=candidate.provider,
+            language=candidate.language,
+            subtitle_path=download.subtitle_path,
+            postprocess=postprocess,
+            error=None,
+        )
+        self.state.mark_complete(item_key, history)
+        self.notice = f"Saved {download.subtitle_path.name}"
+        self.candidates = []
+        self._refresh_all()
+        if self.state.active_item:
+            self.query = self.state.active_item.path.stem
+            self.start_search()
+
+    def _replace_decided(
+        self,
+        confirmed: bool,
+        item_key: str,
+        candidate: Candidate,
+    ) -> None:
+        if confirmed:
+            self.run_download(item_key, candidate, True)
+        else:
+            self.notice = "Kept the existing subtitle"
+            self._refresh_all()
+
+    def _download_crashed(self, item_key: str, error: str) -> None:
+        self.downloading = False
+        self.state.mark_failed(item_key, error)
+        self.last_error = error
+        self._advance_queue()
+
+    def _advance_queue(self) -> None:
+        self._refresh_all()
+        item = self.state.active_item
+        if item:
+            self.query = item.path.stem
+            self.start_search()
+
+    def action_help(self) -> None:
+        self.notify(
+            "1–4 views · b engine · l language · / query · "
+            "j/k move · Enter download · m merge · q quit",
+            title="Command deck shortcuts",
+            timeout=8,
+        )
+
+    def action_request_quit(self) -> None:
+        config_dirty = self.query_one(ConfigView).dirty
+        unfinished = any(
+            item.status
+            not in {QueueStatus.DONE, QueueStatus.FAILED, QueueStatus.SKIPPED}
+            for item in self.state.queue
+        )
+        if self.searching or self.downloading or unfinished or config_dirty:
+            self.push_screen(
+                ConfirmQuit(),
+                lambda confirmed: self.exit() if confirmed else None,
+            )
+            return
+        self.exit()
+
+    def on_resize(self, event) -> None:
+        try:
+            self.query_one("#detail-panel").display = event.size.width >= 100
+        except NoMatches:
+            return
+
+    @on(Input.Submitted, "#query-input")
+    def on_query_submitted(self, event: Input.Submitted) -> None:
+        self.query = event.value.strip()
+        self.start_search()
+
+    @on(Button.Pressed, "#query-submit")
+    def on_query_button(self) -> None:
+        self.query = self.query_one("#query-input", Input).value.strip()
+        self.start_search()
+
+    @on(DataTable.RowHighlighted, "#results-table")
+    def on_result_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        self.cursor_index = event.cursor_row
+
+    @on(Button.Pressed)
+    def on_button(self, event: Button.Pressed) -> None:
+        button_id = event.button.id or ""
+        if button_id.startswith("tab-"):
+            self.action_show_view(button_id.removeprefix("tab-"))
+        elif button_id in {"chip-engine", "config-engine"}:
+            self.action_open_engine()
+        elif button_id in {"chip-language", "config-language"}:
+            self.action_open_language()
+        elif button_id == "chip-command":
+            self.action_open_palette()
+        elif button_id == "download-selected":
+            self.action_download_cursor()
+        elif button_id == "copy-url":
+            self.action_copy_url()
+        elif button_id == "config-save":
+            self.action_save_config()
+        elif button_id == "config-discard":
+            self._discard_config_draft()
+        elif button_id == "queue-skip":
+            item = self.state.active_item
+            if item:
+                self.state.skip(item.key)
+                self.notice = f"Skipped {item.path.name}"
+                self._advance_queue()
+        elif button_id == "queue-retry":
+            failed = next(
+                (
+                    item
+                    for item in self.state.queue
+                    if item.status is QueueStatus.FAILED
+                ),
+                None,
+            )
+            if failed:
+                self.state.retry(failed.key)
+                self.notice = f"Retrying {failed.path.name}"
+                self._refresh_all()
+                self.start_search()
+
+    def action_save_config(self) -> None:
+        if self.state.active_view != "config":
+            self.notice = "Open Config before saving settings"
+            self._refresh_status()
+            return
+        self._request_config_save()
+
+    def _draft_from_config_view(self) -> ApplicationConfig:
+        view = self.query_one(ConfigView)
+        draft = copy.deepcopy(self.config_draft)
+        general = draft.general
+        general.sync_audio_to_subs = str(view.query_one("#config-sync", Select).value)
+        general.hearing_impaired = str(view.query_one("#config-hi", Select).value)
+        general.skip_interactive_menu = view.query_one("#config-skip", Switch).value
+        general.no_tui = view.query_one("#config-no-tui", Switch).value
+        general.opt_force_utf8 = view.query_one("#config-utf8", Switch).value
+        general.auto_selection = view.query_one("#config-auto", Switch).value
+        general.show_ai_translated = view.query_one("#config-ai", Switch).value
+        draft.cleaning.enabled = view.query_one("#config-clean", Switch).value
+        ads = view.query_one("#config-ads", Input).value.strip()
+        draft.cleaning.ads_file_path = Path(ads) if ads else None
+        return draft
+
+    def _request_config_save(
+        self,
+        *,
+        after_save: Callable[[], None] | None = None,
+    ) -> None:
+        draft = self._draft_from_config_view()
+        diff = self.config_repository.preview_diff(draft)
+        changed_fields = list(diff.changed_fields)
+        if self.config_draft_language != self.state.language:
+            changed_fields.append("session.language")
+        diff = ConfigDiff(changed_fields=sorted(changed_fields))
+        if not changed_fields:
+            self.config_draft = draft
+            self.query_one(ConfigView).mark_clean()
+            self.notice = "Configuration is already up to date"
+            self._refresh_all()
+            if after_save:
+                after_save()
+            return
+        self._pending_config_draft = draft
+        self._pending_config_language = self.config_draft_language
+        self._after_config_save = after_save
+        self.push_screen(ConfirmConfigSave(diff), self._config_save_decided)
+
+    def _config_save_decided(self, confirmed: bool) -> None:
+        draft = self._pending_config_draft
+        language = self._pending_config_language
+        after_save = self._after_config_save
+        self._pending_config_draft = None
+        self._pending_config_language = None
+        self._after_config_save = None
+        if not confirmed or draft is None:
+            self.notice = "Configuration save cancelled"
+            self._refresh_status()
+            return
+        preferred = draft.general.preferred_backend
+        engine_changed = (
+            preferred is not EngineMode.ASK and preferred is not self.state.engine_mode
+        )
+        language_changed = bool(language and language != self.state.language)
+        if not self.config_path:
+            self.notice = "Session updated; no config path was supplied"
+        else:
+            try:
+                diff = self.config_repository.save(draft)
+            except Exception as exc:
+                self.last_error = (
+                    "Could not save configuration "
+                    f"({type(exc).__name__}); draft kept"
+                )
+                self._refresh_all()
+                return
+            self.notice = (
+                f"Saved {len(diff.changed_fields)} config field"
+                f"{'s' if len(diff.changed_fields) != 1 else ''}"
+            )
+        self.application_config = copy.deepcopy(draft)
+        self.config_draft = copy.deepcopy(draft)
+        if preferred is not EngineMode.ASK:
+            self.state.choose_engine(preferred)
+        if language:
+            self.state.set_language(language)
+        restart_search = False
+        item = self.state.active_item
+        if (
+            (engine_changed or language_changed)
+            and item is not None
+            and item.status
+            in {
+                QueueStatus.QUEUED,
+                QueueStatus.SEARCHING,
+                QueueStatus.AWAITING_PICK,
+            }
+        ):
+            self.search_generation += 1
+            self.searching = False
+            self.state.restart_search(item.key)
+            self.candidates = []
+            self.cursor_index = 0
+            restart_search = True
+        self.last_error = None
+        self.query_one(ConfigView).mark_clean()
+        self._refresh_all()
+        if after_save:
+            after_save()
+        if restart_search:
+            self.start_search()
+
+    def _discard_config_draft(self) -> None:
+        self.config_draft = copy.deepcopy(self.application_config)
+        self.config_draft_language = self.state.language
+        view = self.query_one(ConfigView)
+        view.mark_clean()
+        view.refresh_from_state(self)
+        self.notice = "Discarded unsaved configuration changes"
+        self._refresh_status()
+
+    def watch_candidates(self, _value) -> None:
+        self._refresh_search()
+
+    def watch_cursor_index(self, _value) -> None:
+        self._refresh_search()
+
+    def watch_query(self, _value) -> None:
+        self._refresh_query()
+
+    def watch_searching(self, _value) -> None:
+        self._refresh_status()
+
+    def watch_downloading(self, _value) -> None:
+        self._refresh_status()
+
+    def watch_last_error(self, _value) -> None:
+        self._refresh_status()
+
+    def watch_notice(self, _value) -> None:
+        self._refresh_status()
+
+    def watch_merge_mode(self, _value) -> None:
+        self._refresh_status()
+
+    def _refresh_all(self) -> None:
+        self._refresh_topbar()
+        self._refresh_query()
+        self._refresh_search()
+        self._refresh_queue()
+        self._refresh_history()
+        self._refresh_config()
+        self._refresh_status()
+
+    def _refresh_topbar(self) -> None:
+        self._safe_refresh(TopBar)
+
+    def _refresh_query(self) -> None:
+        self._safe_refresh(QueryBar)
+
+    def _refresh_search(self) -> None:
+        self._safe_refresh(SearchView)
+        self._safe_refresh(ResultsTable)
+        self._safe_refresh_by_id("#detail-panel")
+
+    def _refresh_queue(self) -> None:
+        self._safe_refresh(QueueView)
+
+    def _refresh_history(self) -> None:
+        self._safe_refresh(HistoryView)
+
+    def _refresh_config(self) -> None:
+        self._safe_refresh(ConfigView)
+
+    def _refresh_status(self) -> None:
+        self._safe_refresh(StatusBar)
+
+    def _safe_refresh(self, widget_type) -> None:
+        try:
+            self.query_one(widget_type).refresh_from_state(self)
+        except NoMatches:
+            return
+
+    def _safe_refresh_by_id(self, selector: str) -> None:
+        try:
+            self.query_one(selector).refresh_from_state(self)
+        except NoMatches:
+            return
+
+
+def run_tui(
+    *,
+    config: dict[str, Any],
+    media_paths: list[str],
+    overrides: dict[str, Any],
+    config_path: str,
+) -> None:
+    SubsApp(
         config=config,
         media_paths=media_paths,
         overrides=overrides,
         config_path=config_path,
-    )
-    app.run()
+    ).run()

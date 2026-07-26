@@ -1,9 +1,11 @@
 requests
+chardet<6
 black
 ffmpeg
 ffsubsync
 thefuzz
 pyyaml
+ruamel.yaml>=0.18,<0.19
 rich
-textual
+textual>=8,<9
 rarfile  # optional: needed only for the rare SubSource .rar uploads (falls back to 7z otherwise)

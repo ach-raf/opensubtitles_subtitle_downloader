@@ -1,6 +1,4 @@
-import os
 import re
-import configparser
 from pathlib import Path
 
 
@@ -10,7 +8,7 @@ def read_file(_file_path):
     :param _file_path: path to a certain file
     :return: opened file
     """
-    with open(_file_path, "r", encoding="utf8") as _file_to_read:
+    with open(_file_path, encoding="utf8") as _file_to_read:
         _file = _file_to_read.read()
     return _file
 
@@ -39,12 +37,8 @@ def get_ads_list(_ads_file_path, ads_separator=","):
 
 def clean_ads_regex(_subtitle_file_path, _ads_to_remove):
     full_path = Path(_subtitle_file_path)
-    directory_name = full_path.parent
-    file_name = full_path.stem
-    file_extension = full_path.suffix
 
     _content = read_file(full_path.absolute())
-    between_brackets_regex = r"\[([^]]+)\]"
     # clean _ads_to_remove from empty strings
     _ads_to_remove = [ad for ad in _ads_to_remove if ad]
 
@@ -67,17 +61,19 @@ def clean_ads_regex(_subtitle_file_path, _ads_to_remove):
     print(f"{full_path.absolute()} cleaned!")
 
 
-def clean_ads(_subtitle_file_path, ads_separator=","):
+def clean_ads(_subtitle_file_path, ads_separator=",", ads_file_path=None):
     """
     clean ads from a subtitle file
     :param _subtitle_file_path: path to the subtitle file
     :param _ads_file_path: path to the ads file
     :return: a new subtitle file without ads
     """
-    current_script_directory = Path(__file__).parent.absolute()
-    ads_file_path = Path(current_script_directory, "ads.txt")
+    if ads_file_path is None:
+        current_script_directory = Path(__file__).parent.absolute()
+        ads_file_path = Path(current_script_directory, "ads.txt")
     _ads_to_remove = get_ads_list(ads_file_path, ads_separator)
     clean_ads_regex(_subtitle_file_path, _ads_to_remove)
+    return True
 
 
 if __name__ == "__main__":

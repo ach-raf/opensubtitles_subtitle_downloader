@@ -1,204 +1,336 @@
-/* Textual CSS ported from the Command Deck mockup tokens.
-   Dark paper, phosphor-green accent, amber accent-2, mono font. */
+$canvas: #090d12;
+$surface: #101720;
+$surface-raised: #151f2b;
+$line: #263446;
+$ink: #e7edf5;
+$muted: #8390a2;
+$blue: #75a7ff;
+$green: #68d5a4;
+$amber: #e7b96a;
+$red: #ef7777;
 
 Screen {
-    background: #0d1014;        /* oklch(13% 0.014 250) approx */
-    color: #d8dde6;             /* ink */
-    layers: base overlay;
+    background: $canvas;
+    color: $ink;
 }
 
-/* ----------------------------- TopBar ----------------------------- */
 TopBar {
-    height: 3;
-    dock: top;
+    height: 4;
+    background: $surface;
+    border-bottom: solid $line;
     padding: 0 1;
-    background: #181c24;        /* bg-elev */
-    border-bottom: solid #2a3140; /* rule */
+    align-vertical: middle;
 }
-TopBar > .brand {
-    color: #e6e9ef;
+
+#brand {
+    width: 9;
+    color: $green;
     text-style: bold;
-    padding: 0 1 0 0;
+    content-align: left middle;
 }
-TopBar > .brand .dot {
-    color: #4ddb9a;             /* accent phosphor green */
+
+.tab {
+    min-width: 9;
+    width: 9;
+    height: 3;
+    border: none;
+    background: transparent;
+    color: $muted;
 }
-TopBar #tabs {
+
+.tab:hover,
+.tab.active {
+    color: $ink;
+    background: $surface-raised;
+}
+
+.tab.active {
+    border-bottom: heavy $green;
+}
+
+.tab.dirty {
+    color: $amber;
+}
+
+.top-spacer {
     width: 1fr;
 }
-TopBar .chip {
-    height: 1;
-    min-width: 6;
-    padding: 0 1;
-    margin: 0 0 0 1;
-    background: #181c24;
-    border: solid #2a3140;
-    color: #8a93a3;
-    text-align: center;
-}
-TopBar .chip:hover {
-    border: solid #4ddb9a;
-}
-TopBar .chip .val {
-    color: #e6e9ef;
-}
-TopBar .chip.lang .val {
-    color: #4ddb9a;
-}
-TopBar .chip.eng .val {
-    color: #6f86d6;             /* accent-3 blue */
-}
-TopBar .badge {
-    height: 1;
-    min-width: 4;
-    padding: 0 1;
-    margin: 0 0 0 1;
-    border: solid #2a3140;
-    color: #4ddb9a;
-    text-align: center;
-}
-TopBar .badge.warn {
-    color: #d9a441;
-}
-TopBar .badge.bad {
-    color: #c75450;
-}
 
-/* ----------------------------- QueryBar ----------------------------- */
-QueryBar {
+.chip {
+    width: 18;
     height: 3;
-    dock: top;
-    padding: 0 1;
-    background: #14181f;        /* bg-soft */
-    border-bottom: solid #2a3140;
-}
-QueryBar > #query-meta {
-    color: #8a93a3;
-    padding: 0 1;
-}
-QueryBar > #hash-badge {
-    color: #4ddb9a;
-    border: solid #2f5f4a;
-    padding: 0 1;
-    margin: 0 0 0 1;
+    margin-left: 1;
+    border: round $line;
+    background: $surface-raised;
+    color: $ink;
 }
 
-/* ----------------------------- Main split ----------------------------- */
-#main-split {
-    layout: grid;
-    grid-size: 2 1;
-    grid-columns: 2fr 1fr;
-    grid-rows: 1fr;
-    padding: 0 1;
+#chip-language {
+    width: 9;
+    min-width: 9;
+}
+
+.chip:hover {
+    border: round $blue;
+}
+
+#workspace {
     height: 1fr;
 }
 
-/* ResultsTable panel */
-#results-panel {
-    border: solid #2a3140;
-    background: #14181f;
-    padding: 0 1 0 0;
-    min-width: 20;
-}
-#results-panel > .panel-h {
-    color: #6a7280;
-    padding: 1 1 0 1;
-    text-style: bold;
+#search-view,
+#queue-view,
+#history-view,
+#config-view {
+    height: 100%;
+    padding: 1 2;
+    background: $canvas;
 }
 
-ResultsTable {
-    background: #14181f;
+QueryBar {
+    height: 5;
+    background: $surface;
+    border: round $line;
+    padding: 0 1;
+    align-vertical: middle;
 }
 
-/* DetailPane */
-#detail-panel {
-    border: solid #2a3140;
-    background: #14181f;
-    padding: 1 1;
-    margin: 0 0 0 1;
-}
-#detail-panel > .panel-h {
-    color: #6a7280;
+#query-label {
+    width: 8;
+    color: $muted;
     text-style: bold;
-}
-#detail-panel #detail-title {
-    color: #e6e9ef;
-    text-style: bold;
-    padding: 1 0 0 0;
-}
-#detail-panel #detail-movie {
-    color: #d9a441;             /* accent-2 amber */
-    padding: 0 0 1 0;
-}
-#detail-panel .kv-k {
-    color: #6a7280;
-}
-#detail-panel .kv-v {
-    color: #d8dde6;
-}
-#detail-panel .kv-v.good {
-    color: #4ddb9a;
-}
-#detail-panel .kv-v.warn {
-    color: #d9a441;
+    content-align: left middle;
 }
 
-/* ----------------------------- StatusBar ----------------------------- */
-StatusBar {
+#query-input {
+    width: 1fr;
     height: 3;
-    dock: bottom;
-    padding: 0 1;
-    background: #181c24;
-    border-top: solid #2a3140;
-    color: #8a93a3;
+    border: none;
+    background: $canvas;
 }
-StatusBar #sb-status {
-    color: #4ddb9a;
-    padding: 0 1 0 0;
+
+#query-input:focus {
+    border: tall $blue;
+}
+
+#query-submit {
+    width: 12;
+    height: 3;
+    margin-left: 1;
+}
+
+#query-meta {
+    width: 15;
+    color: $muted;
+    content-align: right middle;
+}
+
+#search-split {
+    height: 1fr;
+}
+
+#search-state {
+    height: 2;
+    padding: 0 2;
+    color: $muted;
+    background: $surface;
+    border-bottom: solid $line;
+}
+
+#results-panel {
+    width: 1fr;
+    height: 100%;
+    background: $surface;
+    border: round $line;
+}
+
+.panel-title,
+.view-title {
+    height: 3;
+    padding: 1 1 0 1;
+    color: $muted;
     text-style: bold;
 }
-StatusBar .sep {
-    color: #4a5260;
+
+.view-title {
+    color: $ink;
+}
+
+.view-subtitle {
+    height: 2;
+    color: $muted;
     padding: 0 1;
 }
-StatusBar .sb-val {
-    color: #e6e9ef;
+
+ResultsTable,
+#queue-table,
+#history-table {
+    height: 1fr;
+    background: $surface;
+    border: none;
 }
-StatusBar #sb-hints {
-    color: #6a7280;
-    padding: 0 0 0 1;
-    text-align: right;
+
+.queue-actions {
+    height: 4;
+    dock: bottom;
+    align-vertical: middle;
+}
+
+.queue-actions Button {
+    width: 18;
+    margin-right: 1;
+}
+
+DataTable > .datatable--header {
+    background: $surface-raised;
+    color: $muted;
+    text-style: bold;
+}
+
+DataTable > .datatable--cursor {
+    background: #203146;
+    color: $ink;
+}
+
+DetailPane {
+    width: 38;
+    min-width: 30;
+    height: 100%;
+    margin-left: 1;
+    padding: 0 2 1 2;
+    background: $surface;
+    border: round $line;
+}
+
+#detail-title {
+    height: auto;
+    min-height: 3;
+    margin-top: 1;
+    color: $ink;
+    text-style: bold;
+}
+
+#detail-provider {
+    height: 2;
+    color: $blue;
+}
+
+#detail-kv {
+    height: auto;
+    margin: 1 0;
+    color: $muted;
+}
+
+#download-selected,
+#copy-url {
+    width: 100%;
+    margin-top: 1;
+}
+
+#config-scroll {
+    height: 1fr;
+    scrollbar-color: $line;
+}
+
+.config-heading {
+    height: 3;
+    margin-top: 1;
+    padding: 1;
+    color: $amber;
+    text-style: bold;
+    border-bottom: solid $line;
+}
+
+.config-row {
+    height: 4;
+    padding: 0 1;
+    align-vertical: middle;
+}
+
+.config-row Label {
+    width: 32;
+    color: $ink;
+}
+
+.config-row Button,
+.config-row Select,
+.config-row Input {
     width: 1fr;
 }
 
-/* DataTable styling */
-DataTable {
-    background: #14181f;
-    color: #d8dde6;
-}
-DataTable > .datatable--header {
-    background: #14181f;
-    color: #6a7280;
-    text-style: bold;
-}
-DataTable > .datatable--cursor {
-    background: #1a2a24;
-    color: #e6e9ef;
-}
-DataTable > .datatable--hover {
-    background: #1a2030;
+.config-row Switch {
+    width: auto;
 }
 
-/* Error / empty-state callout */
-#empty-state {
-    color: #8a93a3;
+#config-provider-languages {
+    height: auto;
     padding: 1 2;
-    text-align: center;
+    background: $surface;
+    border: round $line;
 }
-#error-banner {
-    color: #c75450;
-    background: #2a1818;
+
+#config-actions {
+    height: 5;
+    dock: bottom;
+    align-vertical: middle;
+    background: $surface;
+    border-top: solid $line;
     padding: 0 1;
-    dock: top;
-    height: 1;
+}
+
+#config-save {
+    width: 18;
+}
+
+#config-discard {
+    width: 20;
+    margin-left: 1;
+}
+
+#config-save-status {
+    width: 1fr;
+    padding-left: 2;
+    color: $muted;
+}
+
+StatusBar {
+    height: 3;
+    padding: 0 2;
+    background: $surface;
+    border-top: solid $line;
+    align-vertical: middle;
+}
+
+#status-message {
+    width: 1fr;
+}
+
+#status-progress {
+    width: auto;
+    min-width: 18;
+    color: $muted;
+    content-align: center middle;
+}
+
+#status-hints {
+    width: auto;
+    color: $muted;
+    content-align: right middle;
+}
+
+Button.-primary {
+    background: $green;
+    color: #07110d;
+    text-style: bold;
+    border: none;
+}
+
+Button.-primary:hover {
+    background: #83e9bb;
+}
+
+Notification {
+    background: $surface-raised;
+    border: round $blue;
+    color: $ink;
 }

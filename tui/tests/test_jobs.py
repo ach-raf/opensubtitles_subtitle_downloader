@@ -1,0 +1,148 @@
+from tui.domain import Candidate, DownloadResult, Provider
+from tui.jobs import JobCoordinator
+
+
+def candidate_for(provider, provider_id="77"):
+    return Candidate(
+        provider=provider,
+        provider_id=provider_id,
+        release="Movie",
+        language="en",
+    )
+
+
+class RecordingAdapter:
+    def __init__(self, provider):
+        self.provider = provider
+        self.downloads = []
+
+    def download(self, candidate, media_path):
+        self.downloads.append(candidate.key)
+        target = media_path.with_name(f"{media_path.stem}.en.srt")
+        target.write_text("new", encoding="utf-8")
+        return DownloadResult(
+            provider=self.provider,
+            media_path=media_path,
+            subtitle_path=target,
+        )
+
+
+class FailingCleaner:
+    def __init__(self, message):
+        self.message = message
+
+    def clean(self, subtitle_path, ads_path=None):
+        raise RuntimeError(self.message)
+
+
+class RecordingCleaner:
+    def __init__(self):
+        self.ads_paths = []
+
+    def clean(self, subtitle_path, ads_path=None):
+        self.ads_paths.append(ads_path)
+        return True
+
+
+def test_download_dispatches_to_candidate_provider(tmp_path):
+    adapters = {
+        Provider.OPENSUBTITLES: RecordingAdapter(Provider.OPENSUBTITLES),
+        Provider.SUBDL: RecordingAdapter(Provider.SUBDL),
+    }
+    candidate = candidate_for(Provider.SUBDL)
+
+    result = JobCoordinator(adapters).download(candidate, tmp_path / "Movie.mkv")
+
+    assert result.provider is Provider.SUBDL
+    assert result.subtitle_path == tmp_path / "Movie.en.srt"
+    assert adapters[Provider.SUBDL].downloads == [candidate.key]
+    assert adapters[Provider.OPENSUBTITLES].downloads == []
+
+
+def test_existing_target_requires_explicit_replace(tmp_path):
+    adapters = {Provider.SUBDL: RecordingAdapter(Provider.SUBDL)}
+    target = tmp_path / "Movie.en.srt"
+    target.write_text("old", encoding="utf-8")
+
+    result = JobCoordinator(adapters).download(
+        candidate_for(Provider.SUBDL),
+        tmp_path / "Movie.mkv",
+    )
+
+    assert result.conflict_path == target
+    assert target.read_text(encoding="utf-8") == "old"
+    assert adapters[Provider.SUBDL].downloads == []
+
+
+def test_explicit_replace_is_atomic_from_staging(tmp_path):
+    adapters = {Provider.SUBDL: RecordingAdapter(Provider.SUBDL)}
+    target = tmp_path / "Movie.en.srt"
+    target.write_text("old", encoding="utf-8")
+
+    result = JobCoordinator(adapters).download(
+        candidate_for(Provider.SUBDL),
+        tmp_path / "Movie.mkv",
+        overwrite=True,
+    )
+
+    assert result.succeeded
+    assert target.read_text(encoding="utf-8") == "new"
+
+
+def test_clean_failure_is_not_recorded_as_success(tmp_path):
+    cleaner = FailingCleaner("bad ads pattern")
+    download = DownloadResult(
+        provider=Provider.SUBDL,
+        media_path=tmp_path / "Movie.mkv",
+        subtitle_path=tmp_path / "Movie.en.srt",
+    )
+
+    result = JobCoordinator({}, cleaner=cleaner).postprocess(
+        download,
+        clean=True,
+        sync=False,
+        ads_path=tmp_path / "ads.txt",
+    )
+
+    assert result.cleaned is False
+    assert result.clean_error == "bad ads pattern"
+
+
+def test_cleaner_receives_configured_ads_path(tmp_path):
+    cleaner = RecordingCleaner()
+    ads = tmp_path / "custom-ads.txt"
+    download = DownloadResult(
+        provider=Provider.SUBDL,
+        media_path=tmp_path / "Movie.mkv",
+        subtitle_path=tmp_path / "Movie.en.srt",
+    )
+
+    result = JobCoordinator({}, cleaner=cleaner).postprocess(
+        download,
+        clean=True,
+        sync=False,
+        ads_path=ads,
+    )
+
+    assert result.cleaned
+    assert cleaner.ads_paths == [ads]
+
+
+def test_force_utf8_normalizes_legacy_encoded_subtitle(tmp_path):
+    subtitle = tmp_path / "Movie.en.srt"
+    subtitle.write_bytes("café".encode("cp1252"))
+    download = DownloadResult(
+        provider=Provider.SUBDL,
+        media_path=tmp_path / "Movie.mkv",
+        subtitle_path=subtitle,
+    )
+
+    result = JobCoordinator({}).postprocess(
+        download,
+        force_utf8=True,
+        clean=False,
+        sync=False,
+    )
+
+    assert result.utf8_normalized
+    assert subtitle.read_text(encoding="utf-8") == "café"

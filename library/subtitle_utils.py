@@ -1,14 +1,16 @@
 # subtitle_utils.py
 
-import re
 import os
+import pickle
+import re
 import struct
+import time
 from pathlib import Path
-from thefuzz import fuzz
+
 from rich.console import Console
 from rich.table import Table
-import pickle
-import time
+from thefuzz import fuzz
+
 import library.clean_subtitles as clean_subtitles
 import library.sync_subtitles as sync_subtitles
 
@@ -168,17 +170,28 @@ class SubtitleUtils:
             self.console.print(f"[bold red]Error reading token: {e}[/]")
             return False
 
-    def clean_subtitles(self, subtitle_path):
+    def clean_subtitles_strict(self, subtitle_path, ads_path=None):
+        return clean_subtitles.clean_ads(
+            subtitle_path,
+            ads_file_path=ads_path,
+        )
+
+    def clean_subtitles(self, subtitle_path, ads_path=None):
         try:
-            clean_subtitles.clean_ads(subtitle_path)
+            return self.clean_subtitles_strict(subtitle_path, ads_path)
         except Exception as e:
             self.console.print(f"[bold red]Error cleaning subtitles: {e}[/]")
+            return False
+
+    def sync_subtitles_strict(self, media_path, subtitle_path):
+        return sync_subtitles.sync_subs_audio(media_path, subtitle_path)
 
     def sync_subtitles(self, media_path, subtitle_path):
         try:
-            sync_subtitles.sync_subs_audio(media_path, subtitle_path)
+            return self.sync_subtitles_strict(media_path, subtitle_path)
         except Exception as e:
             self.console.print(f"[bold red]Error syncing subtitles: {e}[/]")
+            return False
 
     def sort_list_of_dicts_by_key(self, input_list, key_to_sort_by):
         try:
@@ -214,7 +227,7 @@ class SubtitleUtils:
         try:
             longlongformat = "Q"  # unsigned long long little endian
             bytesize = struct.calcsize(longlongformat)
-            fmt = "<%d%s" % (65536 // bytesize, longlongformat)
+            fmt = f"<{65536 // bytesize}{longlongformat}"
 
             with open(media_path, "rb") as f:
                 filesize = os.fstat(f.fileno()).st_size
@@ -236,10 +249,10 @@ class SubtitleUtils:
                 filehash += sum(longlongs)
                 filehash &= 0xFFFFFFFFFFFFFFFF
 
-            returnedhash = "%016x" % filehash
+            returnedhash = "{:016x}".format(filehash)
             return returnedhash
 
-        except (IOError, OSError) as e:
+        except OSError as e:
             self.console.print(
                 f"[bold red]Error: I/O error while generating hash for {media_path}: {e}[/]"
             )
@@ -553,9 +566,13 @@ class SubtitleUtils:
                 score += 50
 
             # Season match (25 points)
-            if season_source and season_target and season_source == season_target:
-                score += 25
-            elif video_is_implicit_s1 and sub_is_implicit_s1:
+            if (
+                season_source
+                and season_target
+                and season_source == season_target
+                or video_is_implicit_s1
+                and sub_is_implicit_s1
+            ):
                 score += 25
 
             # Quality indicators (max 50: 5 terms × 10 points)
@@ -725,13 +742,13 @@ class SubtitleUtils:
             if not path.exists():
                 return False
             # if path is file
-            if path.is_file():
-                # check if file is video file
-                if path.suffix.lower() not in [".mp4", ".mkv", ".avi"]:
-                    return False
-            if path.is_dir():
+            if path.is_file() and path.suffix.lower() not in [
+                ".mp4",
+                ".mkv",
+                ".avi",
+            ]:
                 return False
-            return True
+            return not path.is_dir()
         except Exception as e:
             self.console.print(f"[bold red]Error checking media file: {e}[/]")
             return False

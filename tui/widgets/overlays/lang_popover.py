@@ -10,7 +10,7 @@ adds it for the session (and persists on the next ⌘S).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+from contextlib import suppress
 
 from textual import on
 from textual.app import ComposeResult
@@ -21,11 +21,8 @@ from textual.widgets import Input, Static
 
 from tui.state import native_name
 
-if TYPE_CHECKING:
-    from textual.events import Key
-
 Scope = str  # "all" | "current" | None
-LangResult = Tuple[str, Scope]
+LangResult = tuple[str, Scope]
 
 
 class LanguagePopover(ModalScreen[LangResult]):
@@ -36,11 +33,10 @@ class LanguagePopover(ModalScreen[LangResult]):
     LanguagePopover {
         align: center middle;
     }
-    LanguagePopover > Vertical {
+    LanguagePopover > #lang-dialog {
         width: 48;
         max-width: 80%;
-        height: auto;
-        max-height: 80%;
+        height: 16;
         background: #0f131a;
         border: solid #6f86d6;
         padding: 0 0 1 0;
@@ -58,7 +54,7 @@ class LanguagePopover(ModalScreen[LangResult]):
     LanguagePopover #lang-list {
         padding: 0 1;
         height: auto;
-        max-height: 20;
+        height: 5;
         overflow-y: auto;
     }
     LanguagePopover .lang-row {
@@ -106,10 +102,10 @@ class LanguagePopover(ModalScreen[LangResult]):
 
     def __init__(
         self,
-        languages: Dict[str, str],
+        languages: dict[str, str],
         current: str,
         needs_scope_confirm: bool,
-        remaining_files: List[str],
+        remaining_files: list[str],
     ) -> None:
         super().__init__()
         self.languages = dict(languages)
@@ -118,28 +114,29 @@ class LanguagePopover(ModalScreen[LangResult]):
         self.remaining_files = remaining_files
         self._filter = ""
         self._cursor = 0
-        self._filtered: List[Tuple[str, str]] = []  # (code, native)
-        self._selected_code: Optional[str] = None
+        self._filtered: list[tuple[str, str]] = []  # (code, native)
+        self._selected_code: str | None = None
         self._scope_mode = False
 
     # ---- Compose ----------------------------------------------------------
     def compose(self) -> ComposeResult:
-        with Vertical():
+        with Vertical(id="lang-dialog"):
             yield Static(
                 "[#6f86d6]▾[/] [b]Language[/b]   [dim]/ filter · ↑↓ · ↵ · esc[/dim]",
                 id="pop-head",
                 classes="pop-head",
                 markup=True,
             )
-            yield Input(placeholder="/ to filter, or type an ISO code to add…",
-                        id="lang-filter")
+            yield Input(
+                placeholder="/ to filter, or type an ISO code to add…", id="lang-filter"
+            )
             yield Vertical(
                 Static("", id="lang-list"),
                 id="lang-list-wrap",
             )
             yield Static("", id="scope-prompt")
             yield Static(
-                "[dim]↹ multi-select   [b]a[/b] apply to all queued   [b]c[/b] current file only[/dim]",
+                "[dim][b]a[/b] all queued   " "[b]c[/b] current file only[/dim]",
                 id="pop-foot",
                 classes="pop-foot",
                 markup=True,
@@ -147,10 +144,14 @@ class LanguagePopover(ModalScreen[LangResult]):
 
     def on_mount(self) -> None:
         self._rebuild_list()
+        visible_rows = min(15, max(4, len(self._filtered)))
+        self.query_one("#lang-list-wrap", Vertical).styles.height = visible_rows
+        self.query_one("#lang-dialog", Vertical).styles.height = visible_rows + 11
+        self.query_one("#scope-prompt", Static).display = False
         self.query_one("#lang-filter", Input).focus()
 
     # ---- List building ----------------------------------------------------
-    def _all_entries(self) -> List[Tuple[str, str]]:
+    def _all_entries(self) -> list[tuple[str, str]]:
         entries = [(code, name) for code, name in self.languages.items()]
         # Sort: current first, then alpha by native name.
         entries.sort(key=lambda c: (c[0] != self.current, c[1].lower()))
@@ -174,13 +175,11 @@ class LanguagePopover(ModalScreen[LangResult]):
         self._render_list()
 
     def _safe_update(self, selector: str, content: str) -> None:
-        try:
+        with suppress(Exception):
             self.query_one(selector, Static).update(content)
-        except Exception:  # noqa: BLE001
-            pass
 
     def _render_list(self) -> None:
-        lines: List[str] = []
+        lines: list[str] = []
         for i, (code, name) in enumerate(self._filtered):
             is_current = code == self.current
             lines.append(self._row_markup(i, code, name, is_current))
@@ -211,7 +210,7 @@ class LanguagePopover(ModalScreen[LangResult]):
             )
         self.action_select()
 
-    def on_key(self, event: "Key") -> None:
+    def on_key(self, event) -> None:
         # When scope mode is active, intercept a/c/esc here.
         if self._scope_mode:
             if event.key == "a":
@@ -253,21 +252,27 @@ class LanguagePopover(ModalScreen[LangResult]):
 
         # Show the scope picker.
         self._scope_mode = True
+        self.query_one("#scope-prompt", Static).display = True
+        dialog = self.query_one("#lang-dialog", Vertical)
+        dialog.styles.height = min(30, int(dialog.size.height) + 7)
         # Drop focus from the filter Input so the scope keys (a/c/esc) reach
         # on_key instead of being typed into the filter.
-        try:
+        with suppress(Exception):
             self.query_one("#lang-filter", Input).blur()
-        except Exception:  # noqa: BLE001
-            pass
         self._render_scope_prompt(code, name)
 
     def _render_scope_prompt(self, code: str, name: str) -> None:
         preview = " · ".join(self.remaining_files[:3])
-        more = f" (+{len(self.remaining_files) - 3} more)" if len(self.remaining_files) > 3 else ""
+        more = (
+            f" (+{len(self.remaining_files) - 3} more)"
+            if len(self.remaining_files) > 3
+            else ""
+        )
         self._safe_update(
             "#scope-prompt",
             f"[b]Apply[/b] [#4ddb9a]{name}[/] [b]to:[/b]\n\n"
-            f"[dim]remaining {len(self.remaining_files)} files:[/dim] {preview}{more}\n\n"
+            f"[dim]remaining {len(self.remaining_files)} files:[/dim] "
+            f"{preview}{more}\n\n"
             f"[b][#4ddb9a]a[/][/] all remaining   "
             f"[b][#4ddb9a]c[/][/] current file only   "
             f"[b]esc[/] cancel",

@@ -6,7 +6,7 @@ ctrl+enter run and keep open, esc close.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, List
+from contextlib import suppress
 
 from textual import on
 from textual.app import ComposeResult
@@ -16,9 +16,6 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, Static
 
 from tui.keymap import Action, Keymap
-
-if TYPE_CHECKING:
-    pass
 
 
 class Palette(ModalScreen):
@@ -32,8 +29,7 @@ class Palette(ModalScreen):
     Palette > Vertical {
         width: 72;
         max-width: 95%;
-        height: auto;
-        max-height: 70%;
+        height: 28;
         background: #0f131a;
         border: solid #4ddb9a;
     }
@@ -78,7 +74,7 @@ class Palette(ModalScreen):
     def __init__(self, keymap: Keymap) -> None:
         super().__init__()
         self.keymap = keymap
-        self._filtered: List[Action] = []
+        self._filtered: list[Action] = []
         self._cursor = 0
 
     def compose(self) -> ComposeResult:
@@ -108,13 +104,11 @@ class Palette(ModalScreen):
         self.action_run()
 
     def _safe_update(self, selector: str, content: str) -> None:
-        try:
+        with suppress(Exception):
             self.query_one(selector, Static).update(content)
-        except Exception:  # noqa: BLE001
-            pass
 
     def _render_rows(self) -> None:
-        lines: List[str] = []
+        lines: list[str] = []
         for i, action in enumerate(self._filtered):
             is_sel = i == self._cursor
             marker = "▶" if is_sel else " "

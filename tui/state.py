@@ -2,21 +2,36 @@
 
 Nothing here imports ``library/*`` (or ``download_subs``). This module is pure
 data so it stays trivially unit-testable; the only layer that calls the backend
-is ``tui.services``. Phase 1 uses plain dataclasses; Phase 2 wraps selected
+is the provider adapter layer. Legacy compatibility objects remain below while
+the production application uses ``SessionState``.
 fields in Textual ``reactive`` on the ``SubsApp``.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Dict, List, Optional
+from enum import StrEnum
+
+from tui.config import ApplicationConfig
+from tui.domain import (
+    Candidate,
+    EngineMode,
+)
+from tui.domain import (
+    HistoryEntry as DomainHistoryEntry,
+)
+from tui.domain import (
+    QueueItem as DomainQueueItem,
+)
+from tui.domain import (
+    QueueStatus as DomainQueueStatus,
+)
 
 
 # --------------------------------------------------------------------------- #
 # Backends
 # --------------------------------------------------------------------------- #
-class Backend(str, Enum):
+class Backend(StrEnum):
     """The concrete subtitle engines the TUI can drive, plus ``AUTO``.
 
     Inherits ``str`` so ``Backend.OPENSUBTITLES == "opensubtitles"`` and the
@@ -39,7 +54,7 @@ class Backend(str, Enum):
 
 
 # All engines the engine switcher can fan out to (excludes AUTO).
-CONCRETE_BACKENDS: List[Backend] = [
+CONCRETE_BACKENDS: list[Backend] = [
     Backend.OPENSUBTITLES,
     Backend.SUBDL,
     Backend.SUBSOURCE,
@@ -53,7 +68,7 @@ CONCRETE_BACKENDS: List[Backend] = [
 # "العربية" not "Arabic". Falls back to the code itself if absent. This is a
 # small curated map; users can add languages by ISO code in the popover and
 # those persist to config.yaml on the next save (see ConfigIO).
-LANG_NATIVE_NAMES: Dict[str, str] = {
+LANG_NATIVE_NAMES: dict[str, str] = {
     "en": "English",
     "ar": "العربية",
     "zh": "中文",
@@ -122,12 +137,13 @@ class RunPolicy:
     show_ai_translated: bool = True
     hash_match_first: bool = True
     alt_name_search: bool = True
-    ads_file_path: Optional[str] = None
+    ads_file_path: str | None = None
 
     def validate(self) -> None:
         if self.audio_sync not in SYNC_POLICY_VALUES:
             raise ValueError(
-                f"audio_sync must be one of {SYNC_POLICY_VALUES}, got {self.audio_sync!r}"
+                f"audio_sync must be one of {SYNC_POLICY_VALUES}, "
+                f"got {self.audio_sync!r}"
             )
         if self.hearing_impaired not in HI_POLICY_VALUES:
             raise ValueError(
@@ -145,7 +161,7 @@ class EngineHealth:
 
     name: str
     online: bool = False
-    latency_ms: Optional[int] = None
+    latency_ms: int | None = None
     degraded: bool = False
     last_checked: float = 0.0  # epoch seconds; 0 == never probed
 
@@ -185,9 +201,9 @@ class QueueItem:
     path: str
     name: str  # display name (may be Arabic/CJK)
     status: QueueStatus = "queued"
-    candidates: List[dict] = field(default_factory=list)
-    chosen: Optional[dict] = None
-    error: Optional[str] = None
+    candidates: list[dict] = field(default_factory=list)
+    chosen: dict | None = None
+    error: str | None = None
     progress: float = 0.0  # 0..1
 
     def is_done(self) -> bool:
@@ -199,14 +215,14 @@ class HistoryEntry:
     """A completed (or attempted) download, shown in the History tab."""
 
     media_path: str
-    subtitle_path: Optional[str]
+    subtitle_path: str | None
     release: str
     language: str
     backend: str
     cleaned: bool = False
     synced: bool = False
     sync_skipped: bool = False  # True when sync attempted but failed (no ffs)
-    error: Optional[str] = None
+    error: str | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -227,24 +243,24 @@ class AppState:
     run_policy: RunPolicy = field(default_factory=RunPolicy)
 
     query: str = ""
-    queue: List[QueueItem] = field(default_factory=list)
+    queue: list[QueueItem] = field(default_factory=list)
     cursor_index: int = 0
-    history: List[HistoryEntry] = field(default_factory=list)
-    engine_health: Dict[str, EngineHealth] = field(default_factory=dict)
+    history: list[HistoryEntry] = field(default_factory=list)
+    engine_health: dict[str, EngineHealth] = field(default_factory=dict)
 
     # Languages configured for this session: ISO code -> native name.
     # Seeded from config; the popover can add entries that persist on save.
-    languages: Dict[str, str] = field(default_factory=lambda: {"en": "English"})
+    languages: dict[str, str] = field(default_factory=lambda: {"en": "English"})
 
     # The currently-visible search results (already scored + sorted) plus the
     # score for each row's id, keyed by the candidate id.
-    results: List[dict] = field(default_factory=list)
-    scores: Dict[str, float] = field(default_factory=dict)
-    last_error: Optional[str] = None  # backend/network failure surfaced to UI
+    results: list[dict] = field(default_factory=list)
+    scores: dict[str, float] = field(default_factory=dict)
+    last_error: str | None = None  # backend/network failure surfaced to UI
 
     # Convenience helpers ---------------------------------------------------
 
-    def current_item(self) -> Optional[QueueItem]:
+    def current_item(self) -> QueueItem | None:
         """The queue entry the user is currently interacting with, if any."""
         non_done = [it for it in self.queue if not it.is_done()]
         return non_done[0] if non_done else (self.queue[0] if self.queue else None)
@@ -267,3 +283,222 @@ class AppState:
         self.results = []
         self.scores = {}
         self.cursor_index = 0
+
+
+class InvalidTransition(RuntimeError):
+    """The requested queue mutation is invalid for the item's status."""
+
+
+@dataclass
+class SessionState:
+    """Explicit session choices and validated queue progression."""
+
+    engine_mode: EngineMode = EngineMode.ASK
+    language: str = "en"
+    queue: list[DomainQueueItem] = field(default_factory=list)
+    history: list[DomainHistoryEntry] = field(default_factory=list)
+    candidates: dict[str, Candidate] = field(default_factory=dict)
+    active_view: str = "search"
+    language_confirmed: bool = True
+
+    @classmethod
+    def from_config(
+        cls,
+        config: ApplicationConfig,
+        queue: list[DomainQueueItem] | None = None,
+    ) -> SessionState:
+        mode = config.general.preferred_backend
+        language = "en"
+        ordered_providers = (
+            [mode.provider] if mode.provider is not None else list(config.providers)
+        )
+        for provider in ordered_providers:
+            languages = config.providers[provider].languages
+            if languages:
+                language = next(iter(languages.values()))
+                break
+        return cls(
+            engine_mode=mode,
+            language=language,
+            queue=list(queue or []),
+            language_confirmed=config.general.skip_interactive_menu,
+        )
+
+    @property
+    def needs_engine_setup(self) -> bool:
+        return self.engine_mode is EngineMode.ASK
+
+    @property
+    def needs_language_setup(self) -> bool:
+        return not self.needs_engine_setup and not self.language_confirmed
+
+    @property
+    def active_item(self) -> DomainQueueItem | None:
+        return next(
+            (
+                item
+                for item in self.queue
+                if item.status
+                not in {
+                    DomainQueueStatus.DONE,
+                    DomainQueueStatus.FAILED,
+                    DomainQueueStatus.SKIPPED,
+                }
+            ),
+            None,
+        )
+
+    def choose_engine(
+        self,
+        mode: EngineMode,
+        scope: str = "remaining",
+    ) -> None:
+        if mode is EngineMode.ASK:
+            raise ValueError("ASK is a startup prompt, not a concrete choice")
+        self.engine_mode = mode
+        for item in self._scoped_items(scope):
+            item.engine_mode = mode
+
+    def set_language(self, code: str, scope: str = "remaining") -> None:
+        normalized = code.strip().lower()
+        if not normalized:
+            raise ValueError("Language code cannot be empty")
+        self.language = normalized
+        self.language_confirmed = True
+        for item in self._scoped_items(scope):
+            item.language = normalized
+
+    def begin_search(self, item_key: str) -> None:
+        item = self._item(item_key)
+        self._require(item, {DomainQueueStatus.QUEUED})
+        item.status = DomainQueueStatus.SEARCHING
+        item.error = None
+
+    def set_candidates(
+        self,
+        item_key: str,
+        candidates: list[Candidate],
+    ) -> None:
+        item = self._item(item_key)
+        self._require(item, {DomainQueueStatus.SEARCHING})
+        for candidate in candidates:
+            self.candidates[candidate.key] = candidate
+        item.candidate_keys = [candidate.key for candidate in candidates]
+        item.status = DomainQueueStatus.AWAITING_PICK
+
+    def restart_search(self, item_key: str) -> None:
+        """Invalidate a queued/search result after its search inputs change."""
+        item = self._item(item_key)
+        self._require(
+            item,
+            {
+                DomainQueueStatus.QUEUED,
+                DomainQueueStatus.SEARCHING,
+                DomainQueueStatus.AWAITING_PICK,
+            },
+        )
+        item.status = DomainQueueStatus.QUEUED
+        item.error = None
+        item.candidate_keys.clear()
+        item.selected_candidate_key = None
+
+    def begin_download(
+        self,
+        item_key: str,
+        candidate_key: str,
+    ) -> None:
+        item = self._item(item_key)
+        self._require(item, {DomainQueueStatus.AWAITING_PICK})
+        if candidate_key not in item.candidate_keys:
+            raise InvalidTransition(
+                f"Candidate {candidate_key!r} does not belong to {item_key!r}"
+            )
+        item.selected_candidate_key = candidate_key
+        item.status = DomainQueueStatus.DOWNLOADING
+
+    def begin_postprocess(self, item_key: str) -> None:
+        item = self._item(item_key)
+        self._require(item, {DomainQueueStatus.DOWNLOADING})
+        item.status = DomainQueueStatus.POST_PROCESSING
+
+    def mark_complete(
+        self,
+        item_key: str,
+        history: DomainHistoryEntry,
+    ) -> None:
+        item = self._item(item_key)
+        self._require(
+            item,
+            {
+                DomainQueueStatus.AWAITING_PICK,
+                DomainQueueStatus.DOWNLOADING,
+                DomainQueueStatus.POST_PROCESSING,
+            },
+        )
+        item.status = DomainQueueStatus.DONE
+        item.error = None
+        self.history.append(history)
+
+    def mark_failed(self, item_key: str, error: str) -> None:
+        item = self._item(item_key)
+        if item.status in {
+            DomainQueueStatus.DONE,
+            DomainQueueStatus.SKIPPED,
+        }:
+            raise InvalidTransition(f"Cannot fail an item in {item.status.value}")
+        item.status = DomainQueueStatus.FAILED
+        item.error = error
+
+    def retry(self, item_key: str) -> None:
+        item = self._item(item_key)
+        self._require(
+            item,
+            {DomainQueueStatus.FAILED, DomainQueueStatus.SKIPPED},
+        )
+        item.status = DomainQueueStatus.QUEUED
+        item.error = None
+        item.candidate_keys.clear()
+        item.selected_candidate_key = None
+
+    def skip(self, item_key: str) -> None:
+        item = self._item(item_key)
+        if item.status in {
+            DomainQueueStatus.DONE,
+            DomainQueueStatus.FAILED,
+            DomainQueueStatus.SKIPPED,
+        }:
+            raise InvalidTransition(f"Cannot skip an item in {item.status.value}")
+        item.status = DomainQueueStatus.SKIPPED
+
+    def _item(self, item_key: str) -> DomainQueueItem:
+        for item in self.queue:
+            if item.key == item_key:
+                return item
+        raise KeyError(item_key)
+
+    def _scoped_items(self, scope: str) -> list[DomainQueueItem]:
+        if scope == "current":
+            return [self.active_item] if self.active_item else []
+        if scope != "remaining":
+            raise ValueError("scope must be 'current' or 'remaining'")
+        return [
+            item
+            for item in self.queue
+            if item.status
+            not in {
+                DomainQueueStatus.DONE,
+                DomainQueueStatus.FAILED,
+                DomainQueueStatus.SKIPPED,
+            }
+        ]
+
+    @staticmethod
+    def _require(
+        item: DomainQueueItem,
+        allowed: set[DomainQueueStatus],
+    ) -> None:
+        if item.status not in allowed:
+            expected = ", ".join(status.value for status in allowed)
+            raise InvalidTransition(
+                f"{item.key!r} is {item.status.value}; expected {expected}"
+            )

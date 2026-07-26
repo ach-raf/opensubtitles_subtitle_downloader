@@ -1,24 +1,25 @@
 # SubDL.py is a class that handles subtitle search and download from SubDL API.
-import requests
-import zipfile
-from pathlib import Path
 import re
+import zipfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import requests
+from rich import print as rprint
 from rich.console import Console
 from rich.table import Table
-from rich import print as rprint
+
 from library.subtitle_utils import SubtitleUtils
-from dataclasses import dataclass
-from typing import List, Dict, Any
 
 
 @dataclass
 class SearchResult:
-    subtitles: List[Dict[str, Any]]
-    metadata_results: List[Dict[str, Any]]
+    subtitles: list[dict[str, Any]]
+    metadata_results: list[dict[str, Any]]
 
 
 class SubDL:
-
     def __init__(
         self,
         api_key,
@@ -35,17 +36,22 @@ class SubDL:
         self.console = Console()
         self.subtitle_utils = SubtitleUtils()
         self.standardize_subtitle_objects = None
+        self._last_request_error = None
 
     def _request(self, path, params):
         """GET a v2 endpoint with Bearer auth and return parsed JSON."""
-        response = requests.get(
-            self.api_base_url + path,
-            params=params,
-            headers={"Authorization": f"Bearer {self.api_key}"},
-            timeout=10,
-        )
-        response.raise_for_status()
-        return response.json()
+        try:
+            response = requests.get(
+                self.api_base_url + path,
+                params=params,
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                timeout=10,
+            )
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as exc:
+            self._last_request_error = exc
+            raise
 
     def _parse(self, data):
         """Return (subtitles, metadata). Handles v2 error and success shapes."""
@@ -109,7 +115,9 @@ class SubDL:
             subtitles, metadata = self._parse(data)
             standardized = self._standardize(subtitles)
             if standardized:
-                self.console.print(f"[green]Found {len(standardized)} subtitles[/green]")
+                self.console.print(
+                    f"[green]Found {len(standardized)} subtitles[/green]"
+                )
             self.standardize_subtitle_objects = standardized
             return SearchResult(subtitles=standardized, metadata_results=metadata)
         except requests.exceptions.RequestException as e:
@@ -119,8 +127,10 @@ class SubDL:
             self.console.print(f"[bold red]Error decoding SubDL API response: {e}[/]")
             return SearchResult(subtitles=[], metadata_results=[])
 
-    def filename_search(self, filename, languages="en", subs_per_page=30) -> SearchResult:
-        """Search by release filename via /files/search. Returns matched title + its subtitles."""
+    def filename_search(
+        self, filename, languages="en", subs_per_page=30
+    ) -> SearchResult:
+        """Search by release filename and return its title and subtitles."""
         params = {
             "filename": filename,
             "languages": languages,
@@ -135,11 +145,13 @@ class SubDL:
             self.console.print(f"[bold red]Error during SubDL filename search: {e}[/]")
             return SearchResult(subtitles=[], metadata_results=[])
         except (KeyError, ValueError) as e:
-            self.console.print(f"[bold red]Error decoding SubDL filename search response: {e}[/]")
+            self.console.print(
+                f"[bold red]Error decoding SubDL filename search response: {e}[/]"
+            )
             return SearchResult(subtitles=[], metadata_results=[])
 
     def movie_search(self, q, type="", limit=10):
-        """Resolve a title/name to sd_id/imdb_id/tmdb_id via /movies/search. Returns the results list."""
+        """Resolve a title to provider IDs and return matching results."""
         params = {"q": q, "limit": limit}
         if type:
             params["type"] = type
@@ -151,7 +163,9 @@ class SubDL:
             self.console.print(f"[bold red]Error during SubDL movie search: {e}[/]")
             return []
         except (KeyError, ValueError) as e:
-            self.console.print(f"[bold red]Error decoding SubDL movie search response: {e}[/]")
+            self.console.print(
+                f"[bold red]Error decoding SubDL movie search response: {e}[/]"
+            )
             return []
 
     def _gather_candidates(self, path, language):
@@ -176,28 +190,38 @@ class SubDL:
             add(self.search(film_name=series_match.group(1), languages=language))
 
         # resolve season/episode once for the precise TV pass
-        video_season, video_episode = self.subtitle_utils.extract_season_and_episode(media_name)
+        video_season, video_episode = self.subtitle_utils.extract_season_and_episode(
+            media_name
+        )
 
         # 4) by IMDb ids resolved from any metadata, narrowed by season/episode for TV
         imdb_ids = {m["imdb_id"] for m in metadata if m.get("imdb_id")}
         for imdb_id in imdb_ids:
-            add(self.search(
-                imdb_id=imdb_id, languages=language,
-                season=video_season, episode=video_episode,
-            ))
+            add(
+                self.search(
+                    imdb_id=imdb_id,
+                    languages=language,
+                    season=video_season,
+                    episode=video_episode,
+                )
+            )
 
         # 5) by alternate filename variants
-        for term in (self.subtitle_utils.get_alternate_names(media_name) or []):
+        for term in self.subtitle_utils.get_alternate_names(media_name) or []:
             add(self.search(file_name=term, languages=language))
 
         # 6) last-resort title resolution if nothing matched a title id
         if not imdb_ids:
             for title in self.movie_search(media_name):
                 if title.get("imdb_id"):
-                    add(self.search(
-                        imdb_id=title["imdb_id"], languages=language,
-                        season=video_season, episode=video_episode,
-                    ))
+                    add(
+                        self.search(
+                            imdb_id=title["imdb_id"],
+                            languages=language,
+                            season=video_season,
+                            episode=video_episode,
+                        )
+                    )
 
         # hearing-impaired preference (v2 has no hi param; filter client-side)
         if self.hearing_impaired:
@@ -206,8 +230,19 @@ class SubDL:
         # dedupe by subtitle id
         return list({s["id"]: s for s in subs if s.get("id")}.values())
 
+    def search_candidates(self, path, language, query=""):
+        """Return candidates without selection, printing, or downloading."""
+        self._last_request_error = None
+        search_path = Path(query.strip()) if query.strip() else Path(path)
+        candidates = self._gather_candidates(search_path, language)
+        if not candidates and self._last_request_error is not None:
+            raise RuntimeError(
+                f"SubDL search request failed: {self._last_request_error}"
+            )
+        return candidates
+
     def _select_unpack_file(self, attrs, video_season, video_episode, is_movie):
-        """Pick the best single-file URL from unpack_files. Returns (url, format) or (None, None)."""
+        """Return the best unpacked file URL and format, if one exists."""
         unpack_files = attrs.get("unpack_files") or []
         if not unpack_files:
             return None, None
@@ -215,8 +250,12 @@ class SubDL:
             chosen = unpack_files[0]
         else:
             chosen = next(
-                (f for f in unpack_files
-                 if f.get("season") == video_season and f.get("episode") == video_episode),
+                (
+                    f
+                    for f in unpack_files
+                    if f.get("season") == video_season
+                    and f.get("episode") == video_episode
+                ),
                 None,
             )
             if chosen is None:
@@ -243,12 +282,19 @@ class SubDL:
             return f"{video_input_path.stem}.{language_choice}{ext}"
         return f"{video_input_path.stem}{ext}"
 
+    def _download_url(self, value):
+        if value.startswith(("https://", "http://")):
+            return value
+        return self.download_base_url + value
+
     def _download_single_file(self, rel_url, fmt, video_input_path, language_choice):
-        abs_url = self.download_base_url + rel_url
+        abs_url = self._download_url(rel_url)
         response = requests.get(abs_url, timeout=10)
         response.raise_for_status()
         ext = f".{fmt}" if fmt in ("srt", "ass", "vtt") else ".srt"
-        target_filename = self._target_subtitle_name(video_input_path, language_choice, ext)
+        target_filename = self._target_subtitle_name(
+            video_input_path, language_choice, ext
+        )
         target_path = video_input_path.parent / target_filename
         decoded = self._decode_bytes(response.content)
         with open(target_path, "w", encoding="utf-8") as f:
@@ -259,9 +305,15 @@ class SubDL:
         return target_path
 
     def _download_zip(
-        self, rel_url, video_input_path, language_choice, video_season, video_episode, is_movie
+        self,
+        rel_url,
+        video_input_path,
+        language_choice,
+        video_season,
+        video_episode,
+        is_movie,
     ):
-        abs_url = self.download_base_url + rel_url
+        abs_url = self._download_url(rel_url)
         response = requests.get(abs_url, stream=True, timeout=10)
         response.raise_for_status()
         zip_path = video_input_path.with_suffix(".zip")
@@ -278,7 +330,8 @@ class SubDL:
 
         if not is_movie and (video_season is None or video_episode is None):
             self.console.print(
-                "[bold red]Error: Could not extract season/episode from video filename[/]"
+                "[bold red]Error: Could not extract season/episode from "
+                "video filename[/]"
             )
             zip_path.unlink(missing_ok=True)
             return None
@@ -292,7 +345,8 @@ class SubDL:
 
                 if not ass_files and not srt_files:
                     self.console.print(
-                        "[bold red]Error: No .ass or .srt subtitle files found in the archive.[/]"
+                        "[bold red]Error: No .ass or .srt subtitle files "
+                        "found in the archive.[/]"
                     )
                     return None
 
@@ -302,7 +356,9 @@ class SubDL:
                     matching_subtitle = None
                     for subtitle_file in ass_files + srt_files:
                         sub_season, sub_episode = (
-                            self.subtitle_utils.extract_season_and_episode(subtitle_file)
+                            self.subtitle_utils.extract_season_and_episode(
+                                subtitle_file
+                            )
                         )
                         if sub_season == video_season and sub_episode == video_episode:
                             matching_subtitle = subtitle_file
@@ -315,23 +371,31 @@ class SubDL:
 
                         if subtitle_file == matching_subtitle:
                             target_filename = (
-                                subtitle_filename if subtitle_file.endswith(".ass") else fallback_filename
+                                subtitle_filename
+                                if subtitle_file.endswith(".ass")
+                                else fallback_filename
                             )
-                            selected_subtitle_path = video_input_path.parent / target_filename
+                            selected_subtitle_path = (
+                                video_input_path.parent / target_filename
+                            )
                         else:
                             original_name = Path(subtitle_file).stem
                             extension = Path(subtitle_file).suffix
-                            target_filename = f"{original_name}.{language_choice}{extension}"
+                            target_filename = (
+                                f"{original_name}.{language_choice}{extension}"
+                            )
 
                         target_path = video_input_path.parent / target_filename
                         with open(target_path, "w", encoding="utf-8") as target:
                             target.write(decoded_content)
                         self.console.print(
-                            f"[green]Subtitle extracted and saved as: {target_filename}[/green]"
+                            "[green]Subtitle extracted and saved as: "
+                            f"{target_filename}[/green]"
                         )
                     except Exception as e:
                         self.console.print(
-                            f"[bold red]Error processing subtitle file {subtitle_file}: {e}[/]"
+                            "[bold red]Error processing subtitle file "
+                            f"{subtitle_file}: {e}[/]"
                         )
         finally:
             zip_path.unlink(missing_ok=True)
@@ -344,11 +408,11 @@ class SubDL:
         return selected_subtitle_path
 
     def download_single_subtitle(self, subtitle, video_input_path, language_choice=""):
-        """Download one subtitle. Prefers an unpacked single file; falls back to the zip archive."""
+        """Download one subtitle, preferring an unpacked file over an archive."""
         attrs = subtitle.get("attributes", {}) if isinstance(subtitle, dict) else {}
         try:
-            video_season, video_episode = self.subtitle_utils.extract_season_and_episode(
-                str(video_input_path)
+            video_season, video_episode = (
+                self.subtitle_utils.extract_season_and_episode(str(video_input_path))
             )
             is_movie = video_season is None and video_episode is None
 
@@ -365,8 +429,12 @@ class SubDL:
                 self.console.print("[bold red]Error: subtitle has no download url.[/]")
                 return None
             return self._download_zip(
-                zip_url, video_input_path, language_choice,
-                video_season, video_episode, is_movie,
+                zip_url,
+                video_input_path,
+                language_choice,
+                video_season,
+                video_episode,
+                is_movie,
             )
         except requests.exceptions.RequestException as e:
             self.console.print(f"[bold red]Error downloading subtitle: {e}[/]")
@@ -383,18 +451,20 @@ class SubDL:
     def process_media_file(self, media_path, language_choice, media_name=""):
         try:
             path = Path(media_path)
-            hash = self.subtitle_utils.hashFile(path)
+            self.subtitle_utils.hashFile(path)
             if not media_name:
                 media_name = path.stem
             rprint(
-                f"[cyan]Searching for subtitles for[/cyan] [yellow]{media_name}[/yellow]"
+                "[cyan]Searching for subtitles for[/cyan] "
+                f"[yellow]{media_name}[/yellow]"
             )
             subtitles_list = self._gather_candidates(path, language_choice)
             if not subtitles_list:
                 rprint(f"[red]No subtitles found for {media_name}[/red]")
                 return False
             rprint(
-                f"[green]Total unique results after all searches: {len(subtitles_list)}[/green]"
+                "[green]Total unique results after all searches: "
+                f"{len(subtitles_list)}[/green]"
             )
 
             if self.auto_select:
@@ -446,7 +516,8 @@ class SubDL:
                     self.process_media_file(str(path), language_choice)
             except Exception as e:
                 self.console.print(
-                    f"[bold red]Unexpected error processing media list item {media_path}: {e}[/]"
+                    "[bold red]Unexpected error processing media list item "
+                    f"{media_path}: {e}[/]"
                 )
 
     def print_subtitle_info(self, sub):

@@ -1,16 +1,16 @@
+import argparse
 import os
 import sys
-import argparse
-import yaml
 from enum import Enum
-from typing import List, Dict, Optional, Tuple
+
+import requests
+import yaml
 from rich.console import Console
 from rich.table import Table
-from rich import print as rprint
+
 import library.OpenSubtitles as OpenSubtitles
 from library.SubDL import SubDL
 from library.SubSource import SubSource
-import requests
 
 console = Console()
 
@@ -31,9 +31,9 @@ class SubtitleDownloader:
         self.subsource_client = None
         self.console = Console()
 
-    def _read_config_file(self, file_path: str) -> Dict:
+    def _read_config_file(self, file_path: str) -> dict:
         try:
-            with open(file_path, "r") as file:
+            with open(file_path) as file:
                 return yaml.safe_load(file)
         except FileNotFoundError:
             console.print(f"[bold red]Error: Config file not found at {file_path}[/]")
@@ -94,7 +94,7 @@ class SubtitleDownloader:
                 sys.exit(1)
 
     def _choose_backend(
-        self, media_paths: List[str], preferred_backend: SubtitleBackend
+        self, media_paths: list[str], preferred_backend: SubtitleBackend
     ) -> SubtitleBackend:
         if preferred_backend == SubtitleBackend.ASK:
             return self._ask_backend()
@@ -120,9 +120,7 @@ class SubtitleDownloader:
             elif subdl_available:
                 return SubtitleBackend.SUBDL
             else:
-                console.print(
-                    "[bold red]Error: All subtitle APIs are unavailable.[/]"
-                )
+                console.print("[bold red]Error: All subtitle APIs are unavailable.[/]")
                 return None  # Indicate failure
 
         else:
@@ -153,7 +151,11 @@ class SubtitleDownloader:
                 "SubSource",
                 "Community source with per-season TV organization",
             ),
-            (SubtitleBackend.AUTO, "Auto", "Let the program decide based on availability"),
+            (
+                SubtitleBackend.AUTO,
+                "Auto",
+                "Let the program decide based on availability",
+            ),
         ]
 
         table = Table(show_header=True, header_style="bold magenta")
@@ -183,7 +185,7 @@ class SubtitleDownloader:
                 self.console.print("[bold red]Please enter a valid number[/]")
 
     def download_subtitles(
-        self, media_paths: List[str], language: str, backend: SubtitleBackend
+        self, media_paths: list[str], language: str, backend: SubtitleBackend
     ) -> None:
         chosen_backend = self._choose_backend(media_paths, backend)
         if chosen_backend is None:
@@ -196,7 +198,8 @@ class SubtitleDownloader:
         if chosen_backend == SubtitleBackend.OPENSUBTITLES:
             self._init_opensubtitles()
             self.console.print(
-                f"[bold blue]Using OpenSubtitles backend for {len(media_paths)} files[/]"
+                "[bold blue]Using OpenSubtitles backend for "
+                f"{len(media_paths)} files[/]"
             )
             if self.opensubtitles_client:
                 self.opensubtitles_client.process_media_list(media_paths, language)
@@ -221,13 +224,11 @@ class SubtitleDownloader:
             if self.subsource_client:
                 self.subsource_client.process_media_list(media_paths, language)
             else:
-                console.print(
-                    "[bold red]SubSource client initialization failed.[/]"
-                )
+                console.print("[bold red]SubSource client initialization failed.[/]")
         else:
             console.print("[bold red]Invalid backend selected.[/]")
 
-    def _show_language_menu(self, languages: Dict[str, str]) -> str:
+    def _show_language_menu(self, languages: dict[str, str]) -> str:
         if not languages:
             console.print("[bold red]Error: No languages defined in config.[/]")
             return ""
@@ -253,7 +254,7 @@ class SubtitleDownloader:
             except ValueError:
                 self.console.print("[bold red]Please enter a valid number[/]")
 
-    def interactive_menu(self) -> Tuple[SubtitleBackend, str]:
+    def interactive_menu(self) -> tuple[SubtitleBackend, str]:
         backend = self._get_backend_from_config()
 
         if backend == SubtitleBackend.OPENSUBTITLES:
@@ -276,12 +277,13 @@ class SubtitleDownloader:
             return SubtitleBackend(backend_str)
         except ValueError:
             console.print(
-                f"[bold red]Warning: Invalid backend in config: {backend_str}. Using 'ask' instead.[/]"
+                "[bold red]Warning: Invalid backend in config: "
+                f"{backend_str}. Using 'ask' instead.[/]"
             )
             return SubtitleBackend.ASK
 
 
-def run_legacy(config_path: str, media_paths: List[str]) -> None:
+def run_legacy(config_path: str, media_paths: list[str]) -> None:
     """The original numbered-prompt CLI flow, preserved behind --no-tui.
 
     This is the exact pre-TUI behaviour: read config, build a SubtitleDownloader,
@@ -369,12 +371,12 @@ def main() -> None:
 
     parser = _build_arg_parser()
     args = parser.parse_args()
-    media_paths: List[str] = list(args.paths)
+    media_paths: list[str] = list(args.paths)
 
     # Read config once so we can honor general.no_tui AND seed the TUI.
-    config: Dict = {}
+    config: dict = {}
     try:
-        with open(CONFIG_FILE_PATH, "r", encoding="utf-8") as fh:
+        with open(CONFIG_FILE_PATH, encoding="utf-8") as fh:
             config = yaml.safe_load(fh) or {}
     except FileNotFoundError:
         # Config missing — fall back to the legacy CLI which prints its own

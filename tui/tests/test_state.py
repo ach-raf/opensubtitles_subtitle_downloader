@@ -2,17 +2,34 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
+from tui.config import ConfigRepository
+from tui.domain import (
+    Candidate,
+    EngineMode,
+    PostProcessResult,
+    Provider,
+    QueueStatus,
+)
+from tui.domain import (
+    HistoryEntry as DomainHistoryEntry,
+)
+from tui.domain import (
+    QueueItem as DomainQueueItem,
+)
 from tui.state import (
+    SYNC_POLICY_VALUES,
     AppState,
     Backend,
     EngineHealth,
     HistoryEntry,
+    InvalidTransition,
     QueueItem,
     RunPolicy,
-    HI_POLICY_VALUES,
-    SYNC_POLICY_VALUES,
+    SessionState,
     native_name,
 )
 
@@ -197,3 +214,98 @@ def test_history_entry_defaults():
     assert e.synced is False
     assert e.sync_skipped is False
     assert e.error is None
+
+
+def _domain_item(name, language="en"):
+    return DomainQueueItem(
+        key=name,
+        path=Path(name),
+        language=language,
+        engine_mode=EngineMode.ASK,
+    )
+
+
+def _history(item):
+    return DomainHistoryEntry(
+        item_key=item.key,
+        media_path=item.path,
+        candidate_key="subdl:1",
+        provider=Provider.SUBDL,
+        language=item.language,
+        subtitle_path=Path(f"{item.path.stem}.en.srt"),
+        postprocess=PostProcessResult(),
+    )
+
+
+def test_ask_backend_remains_ask_until_user_selects(tmp_path):
+    config = ConfigRepository(tmp_path / "missing.yaml").load()
+
+    state = SessionState.from_config(config)
+
+    assert state.engine_mode is EngineMode.ASK
+    assert state.needs_engine_setup
+
+
+def test_interactive_startup_requests_language_after_engine(tmp_path):
+    config = ConfigRepository(tmp_path / "missing.yaml").load()
+    state = SessionState.from_config(config)
+
+    state.choose_engine(EngineMode.SUBDL)
+
+    assert state.needs_language_setup
+
+
+def test_completed_item_advances_to_next_non_terminal_item():
+    state = SessionState(queue=[_domain_item("a.mkv"), _domain_item("b.mkv")])
+    first = state.active_item
+    state.begin_search(first.key)
+    state.set_candidates(first.key, [])
+    state.mark_complete(first.key, _history(first))
+
+    assert state.active_item.path.name == "b.mkv"
+
+
+def test_language_scope_updates_only_requested_items():
+    state = SessionState(
+        queue=[
+            _domain_item("a.mkv"),
+            _domain_item("b.mkv"),
+            _domain_item("c.mkv"),
+        ]
+    )
+
+    state.set_language("ar", scope="current")
+    assert [item.language for item in state.queue] == ["ar", "en", "en"]
+    state.set_language("fr", scope="remaining")
+    assert [item.language for item in state.queue] == ["fr", "fr", "fr"]
+
+
+def test_invalid_transition_is_rejected():
+    item = _domain_item("a.mkv")
+    state = SessionState(queue=[item])
+
+    with pytest.raises(InvalidTransition):
+        state.begin_download(item.key, "subdl:1")
+
+
+def test_restart_search_invalidates_old_candidates():
+    item = _domain_item("a.mkv")
+    state = SessionState(queue=[item])
+    state.begin_search(item.key)
+    state.set_candidates(
+        item.key,
+        [
+            Candidate(
+                provider=Provider.SUBDL,
+                provider_id="old",
+                release="old result",
+                language="en",
+            )
+        ],
+    )
+
+    state.restart_search(item.key)
+
+    assert item.status is QueueStatus.QUEUED
+    assert item.candidate_keys == []
+    assert item.selected_candidate_key is None
