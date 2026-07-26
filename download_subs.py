@@ -1,5 +1,6 @@
 import os
 import sys
+import argparse
 import yaml
 from enum import Enum
 from typing import List, Dict, Optional, Tuple
@@ -280,16 +281,17 @@ class SubtitleDownloader:
             return SubtitleBackend.ASK
 
 
-def main():
-    CURRENT_DIR_PATH = os.path.dirname(os.path.realpath(__file__))
-    CONFIG_FILE_PATH = os.path.join(CURRENT_DIR_PATH, "config.yaml")
+def run_legacy(config_path: str, media_paths: List[str]) -> None:
+    """The original numbered-prompt CLI flow, preserved behind --no-tui.
 
+    This is the exact pre-TUI behaviour: read config, build a SubtitleDownloader,
+    show the numbered menus (or honor skip_interactive_menu), and download.
+    """
     try:
-        downloader = SubtitleDownloader(CONFIG_FILE_PATH)
+        downloader = SubtitleDownloader(config_path)
     except SystemExit:
         sys.exit(1)
 
-    media_paths = sys.argv[1:]
     if not media_paths:
         console.print("[bold red]Error: No media paths provided. Exiting...[/]")
         sys.exit(1)
@@ -317,6 +319,89 @@ def main():
             sys.exit(1)
 
     downloader.download_subtitles(media_paths, language, backend)
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    """Parse argv into media paths + the initial overrides that seed the TUI.
+
+    Positional args are media paths (preserving the pre-TUI call shape).
+    Flags only take effect when the TUI runs; the legacy path is unchanged.
+    """
+    parser = argparse.ArgumentParser(
+        prog="download_subs.py",
+        description="Download subtitles from OpenSubtitles / SubDL / SubSource.",
+        # Preserve the old behaviour: unknown positional args are media paths,
+        # and we never error on extra args.
+        add_help=True,
+    )
+    parser.add_argument(
+        "paths",
+        nargs="*",
+        help="One or more video files or folders to fetch subtitles for.",
+    )
+    parser.add_argument(
+        "--tui",
+        action="store_true",
+        help="Launch the Textual TUI (opt-in through Phase 5; default in Phase 6).",
+    )
+    parser.add_argument(
+        "--no-tui",
+        action="store_true",
+        help="Force the legacy numbered-prompt CLI even if TUI is the default.",
+    )
+    parser.add_argument(
+        "--lang",
+        default=None,
+        help="Seed the TUI with an ISO language code (e.g. 'en', 'ar').",
+    )
+    parser.add_argument(
+        "--backend",
+        default=None,
+        choices=["opensubtitles", "subdl", "subsource", "auto", "ask"],
+        help="Seed the TUI with a subtitle backend.",
+    )
+    return parser
+
+
+def main() -> None:
+    CURRENT_DIR_PATH = os.path.dirname(os.path.realpath(__file__))
+    CONFIG_FILE_PATH = os.path.join(CURRENT_DIR_PATH, "config.yaml")
+
+    parser = _build_arg_parser()
+    args = parser.parse_args()
+    media_paths: List[str] = list(args.paths)
+
+    # TUI is opt-in for Phases 0-5; --no-tui and the absence of --tui both run
+    # the legacy CLI. Phase 6 flips this so TUI is the default.
+    use_tui = args.tui and not args.no_tui
+
+    if not use_tui:
+        run_legacy(CONFIG_FILE_PATH, media_paths)
+        return
+
+    # --- TUI path ---
+    # Lazy import so the legacy path (and --help) never requires textual.
+    from tui.app import run_tui
+
+    config: Dict = {}
+    try:
+        with open(CONFIG_FILE_PATH, "r", encoding="utf-8") as fh:
+            config = yaml.safe_load(fh) or {}
+    except FileNotFoundError:
+        console.print(
+            f"[bold red]Error: Config file not found at {CONFIG_FILE_PATH}[/]"
+        )
+        sys.exit(1)
+    except yaml.YAMLError as exc:
+        console.print(f"[bold red]Error: Invalid YAML in config file: {exc}[/]")
+        sys.exit(1)
+
+    if not media_paths:
+        console.print("[bold red]Error: No media paths provided. Exiting...[/]")
+        sys.exit(1)
+
+    overrides = {"lang": args.lang, "backend": args.backend}
+    run_tui(config=config, media_paths=media_paths, overrides=overrides)
 
 
 if __name__ == "__main__":
