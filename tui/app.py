@@ -1,37 +1,91 @@
-"""Minimal Textual app shell for the subtitle downloader TUI.
+"""SubsApp — the Textual command deck.
 
-Phase 0: just boots full-screen and shows the brand label. Real state, widgets,
-and services land in later phases. Nothing here touches ``library/`` yet.
+Phase 2 wires the §01 main screen to real state: TopBar, QueryBar, ResultsTable,
+DetailPane, StatusBar. The App owns the source-of-truth state as Textual
+``reactive`` attributes; mutating them re-renders the affected widgets via the
+``watch_*`` hooks. A ``@work`` SearchWorker runs the first media-path search on
+mount without blocking the UI.
+
+Keyboard (Phase 2 scope):
+    j / k       move cursor in the results table
+    Enter       download the cursor row (Phase 4 wires the real worker; Phase 2 logs intent)
+    /           focus the query input
+    q           quit
+
+Multilingual names render via UTF-8 (spec §11); the App sets no special encoding
+because Textual is UTF-8 by default and relies on the terminal font.
 """
 
 from __future__ import annotations
 
-from typing import List, Optional
+import logging
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
+from textual import work
 from textual.app import App, ComposeResult
-from textual.widgets import Label
+from textual.binding import Binding
+from textual.containers import Container
+from textual.reactive import reactive
+from textual.widgets import Static
+
+from tui.services import (
+    ConfigIO,
+    DownloadWorker,
+    HealthProbe,
+    SearchWorker,
+)
+from tui.state import (
+    AppState,
+    Backend,
+    EngineHealth,
+    HistoryEntry,
+    QueueItem,
+    RunPolicy,
+    native_name,
+)
+from tui.widgets.detail_pane import DetailPane
+from tui.widgets.query_bar import QueryBar
+from tui.widgets.results_table import ResultsTable
+from tui.widgets.status_bar import StatusBar
+from tui.widgets.topbar import TopBar
+
+logger = logging.getLogger("tui.app")
+
+_CSS_PATH = "style.tcss"
 
 
 class SubsApp(App):
-    """The subtitle downloader command deck.
+    """The subtitle downloader command deck."""
 
-    Phase 0 deliberately does almost nothing: it mounts a single brand label so
-    we can prove the Textual wiring, CSS path, and ``q``-to-quit path work
-    behind the ``--tui`` flag. The real surface is layered on in Phases 1-6.
-    """
+    CSS_PATH = _CSS_PATH
 
-    CSS = """
-    Screen {
-        background: #0d1014;
-        color: #d8dde6;
-        align: center middle;
-    }
-    #brand {
-        text-align: center;
-        color: #e6e9ef;
-        text-style: bold;
-    }
-    """
+    BINDINGS = [
+        Binding("q", "quit", "Quit", show=True),
+        Binding("j", "cursor_down", "Down", show=False),
+        Binding("k", "cursor_up", "Up", show=False),
+        Binding("down", "cursor_down", "Down", show=False),
+        Binding("up", "cursor_up", "Up", show=False),
+        Binding("enter", "download_cursor", "Download", show=False),
+        Binding("slash", "focus_query", "Filter", show=False),
+        Binding("L", "open_language", "Language", show=False),
+        Binding("B", "open_engine", "Engine", show=False),
+    ]
+
+    # ---- Source-of-truth reactives (Phase 2 subset) -----------------------
+    # These mirror AppState fields 1:1. Later phases add more (history tab,
+    # config tab) without renaming these.
+    backend: reactive[Backend] = reactive(Backend.OPENSUBTITLES, layout=False)
+    language: reactive[str] = reactive("en", layout=False)
+    merge_mode: reactive[bool] = reactive(False, layout=False)
+    run_policy: reactive[RunPolicy] = reactive(RunPolicy, layout=False)
+    query: reactive[str] = reactive("", layout=False)
+    results: reactive[List[dict]] = reactive(list, layout=False)
+    scores: reactive[Dict[str, float]] = reactive(dict, layout=False)
+    cursor_index: reactive[int] = reactive(0, layout=False)
+    engine_health: reactive[Dict[str, EngineHealth]] = reactive(dict, layout=False)
+    last_error: reactive[Optional[str]] = reactive(None, layout=False)
+    searching: reactive[bool] = reactive(False, layout=False)
 
     def __init__(
         self,
@@ -40,13 +94,266 @@ class SubsApp(App):
         overrides: Optional[dict] = None,
     ) -> None:
         super().__init__()
-        # Stored but unused this phase; later phases read them to seed AppState.
-        self.config = config or {}
-        self.media_paths = list(media_paths or [])
-        self.overrides = overrides or {}
+        self.config: Dict[str, Any] = config or {}
+        self.media_paths: List[str] = list(media_paths or [])
+        self.overrides: Dict[str, Any] = overrides or {}
+        self.history: List[HistoryEntry] = []
+        # Plain (non-reactive) queue; Phase 2 only ever has the first file.
+        self.queue: List[QueueItem] = []
+        self.languages: Dict[str, str] = {"en": "English"}
 
+        # Services — constructed from config. They import library/* lazily.
+        self.search_worker = SearchWorker(self.config)
+        self.download_worker = DownloadWorker(self.config)
+        self.health_probe = HealthProbe(self.config)
+        self.config_path: Optional[str] = None
+
+    # ---- Lifecycle --------------------------------------------------------
+    def on_mount(self) -> None:
+        self._seed_from_config()
+        # Seed the queue from media_paths so the StatusBar shows progress.
+        if self.media_paths:
+            for p in self.media_paths:
+                self.queue.append(QueueItem(path=p, name=Path(p).stem))
+        self._refresh_all_widgets()
+        # Default focus on the results table so j/k work immediately; '/' jumps
+        # to the query input.
+        try:
+            self.query_one(ResultsTable).focus()
+        except Exception:  # noqa: BLE001
+            pass
+        if self.media_paths:
+            self.run_search(self.media_paths[0])
+
+    def _seed_from_config(self) -> None:
+        """Translate config.yaml into the reactive seed values."""
+        try:
+            policy = ConfigIO.run_policy_from_config(self.config)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("run_policy_from_config failed: %s", exc)
+            policy = RunPolicy()
+        self.run_policy = policy
+
+        try:
+            self.languages = ConfigIO.languages_from_config(self.config)
+        except Exception:  # noqa: BLE001
+            self.languages = {"en": "English"}
+
+        backend = ConfigIO.backend_from_config(
+            self.config, override=self.overrides.get("backend")
+        )
+        self.backend = backend
+
+        lang_override = self.overrides.get("lang")
+        if lang_override:
+            self.language = lang_override.lower()
+        elif self.languages:
+            # Default to the first configured language.
+            self.language = next(iter(self.languages))
+
+    # ---- Compose ----------------------------------------------------------
     def compose(self) -> ComposeResult:
-        yield Label("[▸ subs.] [dim]· command deck[/dim]", id="brand", markup=True)
+        yield TopBar()
+        yield QueryBar()
+        yield Container(
+            Container(
+                Static("[dim]results · sorted by match[/dim]", classes="panel-h", markup=True),
+                ResultsTable(),
+                id="results-panel",
+            ),
+            DetailPane(id="detail-panel"),
+            id="main-split",
+        )
+        yield StatusBar()
+
+    # ---- Helpers exposed to widgets --------------------------------------
+    def current_result(self) -> Optional[dict]:
+        """The result row under the cursor, or None."""
+        if not self.results:
+            return None
+        idx = self.cursor_index
+        if idx < 0 or idx >= len(self.results):
+            return None
+        return self.results[idx]
+
+    def _snapshot_state(self) -> AppState:
+        """Build an ephemeral AppState the services layer can consume."""
+        return AppState(
+            backend=self.backend,
+            language=self.language,
+            merge_mode=self.merge_mode,
+            run_policy=self.run_policy,
+            query=self.query,
+            queue=list(self.queue),
+            cursor_index=self.cursor_index,
+            history=list(self.history),
+            engine_health=dict(self.engine_health),
+            languages=dict(self.languages),
+            results=list(self.results),
+            scores=dict(self.scores),
+            last_error=self.last_error,
+        )
+
+    # ---- Watch hooks: re-render widgets when reactives change ------------
+    def watch_backend(self, _: Backend) -> None:
+        self._refresh_topbar_status()
+
+    def watch_language(self, _: str) -> None:
+        self._refresh_topbar_status()
+
+    def watch_engine_health(self, _: dict) -> None:
+        self._refresh_topbar_status()
+
+    def watch_merge_mode(self, _: bool) -> None:
+        self._refresh_results()
+        self._refresh_status()
+
+    def watch_results(self, _: list) -> None:
+        self._refresh_results()
+        self._refresh_querybar()
+        self._refresh_detail()
+        self._refresh_status()
+
+    def watch_cursor_index(self, _: int) -> None:
+        self._refresh_detail()
+
+    def watch_last_error(self, _: Optional[str]) -> None:
+        self._refresh_status()
+
+    def watch_searching(self, _: bool) -> None:
+        self._refresh_status()
+
+    def watch_run_policy(self, _: RunPolicy) -> None:
+        self._refresh_status()
+
+    # ---- Widget refresh helpers ------------------------------------------
+    def _refresh_all_widgets(self) -> None:
+        for name in (
+            "_refresh_topbar_status",
+            "_refresh_querybar",
+            "_refresh_results",
+            "_refresh_detail",
+            "_refresh_status",
+        ):
+            getattr(self, name)()
+
+    def _refresh_topbar_status(self) -> None:
+        try:
+            self.query_one(TopBar).refresh_from_state(self)
+            self.query_one(StatusBar).refresh_from_state(self)
+        except Exception as exc:  # noqa: BLE001 - pre-mount; skip
+            logger.debug("refresh topbar/status skipped: %s", exc)
+
+    def _refresh_querybar(self) -> None:
+        try:
+            self.query_one(QueryBar).refresh_from_state(self)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("refresh querybar skipped: %s", exc)
+
+    def _refresh_results(self) -> None:
+        try:
+            self.query_one(ResultsTable).refresh_from_state(self)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("refresh results skipped: %s", exc)
+
+    def _refresh_detail(self) -> None:
+        try:
+            self.query_one(DetailPane).refresh_from_state(self)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("refresh detail skipped: %s", exc)
+
+    def _refresh_status(self) -> None:
+        try:
+            self.query_one(StatusBar).refresh_from_state(self)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("refresh status skipped: %s", exc)
+
+    # ---- Search worker ----------------------------------------------------
+    @work(thread=True, exclusive=True, name="search")
+    def run_search(self, media_path: str) -> None:
+        """Search one media file off-thread; post results back on mutation.
+
+        ``exclusive=True`` cancels any in-flight search when a new one starts
+        (e.g. user changed language/engine mid-search).
+        """
+        self.call_from_thread(self._begin_search, media_path)
+        state = self._snapshot_state()
+        try:
+            results = self.search_worker.search(state, media_path)
+        except Exception as exc:  # noqa: BLE001 - never crash the UI
+            logger.exception("search failed")
+            self.call_from_thread(self._end_search, [], {}, str(exc))
+            return
+        scores = {str(r.get("id")): float(r.get("_score", 0.0)) for r in results}
+        self.call_from_thread(self._end_search, results, scores, state.last_error)
+
+    def _begin_search(self, media_path: str) -> None:
+        self.searching = True
+        if not self.query:
+            self.query = Path(media_path).stem
+        # Mark the queue item as searching for the StatusBar.
+        for item in self.queue:
+            if item.path == media_path:
+                item.status = "searching"
+
+    def _end_search(
+        self,
+        results: List[dict],
+        scores: Dict[str, float],
+        error: Optional[str],
+    ) -> None:
+        self.searching = False
+        self.results = results
+        self.scores = scores
+        self.cursor_index = 0
+        self.last_error = error
+        # Mark the first queue item as awaiting a pick.
+        for item in self.queue:
+            if item.status == "searching":
+                item.status = "awaiting_pick" if results else "queued"
+
+    # ---- Keybindings ------------------------------------------------------
+    def action_cursor_down(self) -> None:
+        if self.focused and self.focused.__class__.__name__ == "Input":
+            return  # let Input handle its own keys
+        if self.results:
+            self.cursor_index = min(self.cursor_index + 1, len(self.results) - 1)
+
+    def action_cursor_up(self) -> None:
+        if self.focused and self.focused.__class__.__name__ == "Input":
+            return
+        if self.cursor_index > 0:
+            self.cursor_index -= 1
+
+    def action_focus_query(self) -> None:
+        try:
+            self.query_one("#query-input").focus()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def action_open_language(self) -> None:
+        # Phase 3 wires the language popover; Phase 2 no-ops with a log.
+        logger.info("open_language requested (Phase 3)")
+
+    def action_open_engine(self) -> None:
+        logger.info("open_engine requested (Phase 3)")
+
+    def action_download_cursor(self) -> None:
+        row = self.current_result()
+        if row is None:
+            self._notify("No row to download.", severity="warning")
+            return
+        # Phase 4 wires the real DownloadWorker + toast. Phase 2 logs intent.
+        release = (row.get("attributes", {}) or {}).get("release", "")
+        logger.info("download requested for: %s", release)
+        self._notify(f"Would download: {release} (Phase 4 wires the worker)")
+
+    def _notify(self, message: str, severity: str = "information") -> None:
+        """Surface a one-line message. Uses Textual's toast when available."""
+        try:
+            self.notify(message, severity=severity, timeout=3)
+        except Exception:  # noqa: BLE001
+            logger.info("notify: %s", message)
 
 
 def run_tui(

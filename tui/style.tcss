@@ -1,0 +1,204 @@
+/* Textual CSS ported from the Command Deck mockup tokens.
+   Dark paper, phosphor-green accent, amber accent-2, mono font. */
+
+Screen {
+    background: #0d1014;        /* oklch(13% 0.014 250) approx */
+    color: #d8dde6;             /* ink */
+    layers: base overlay;
+}
+
+/* ----------------------------- TopBar ----------------------------- */
+TopBar {
+    height: 3;
+    dock: top;
+    padding: 0 1;
+    background: #181c24;        /* bg-elev */
+    border-bottom: solid #2a3140; /* rule */
+}
+TopBar > .brand {
+    color: #e6e9ef;
+    text-style: bold;
+    padding: 0 1 0 0;
+}
+TopBar > .brand .dot {
+    color: #4ddb9a;             /* accent phosphor green */
+}
+TopBar #tabs {
+    width: 1fr;
+}
+TopBar .chip {
+    height: 1;
+    min-width: 6;
+    padding: 0 1;
+    margin: 0 0 0 1;
+    background: #181c24;
+    border: solid #2a3140;
+    color: #8a93a3;
+    text-align: center;
+}
+TopBar .chip:hover {
+    border: solid #4ddb9a;
+}
+TopBar .chip .val {
+    color: #e6e9ef;
+}
+TopBar .chip.lang .val {
+    color: #4ddb9a;
+}
+TopBar .chip.eng .val {
+    color: #6f86d6;             /* accent-3 blue */
+}
+TopBar .badge {
+    height: 1;
+    min-width: 4;
+    padding: 0 1;
+    margin: 0 0 0 1;
+    border: solid #2a3140;
+    color: #4ddb9a;
+    text-align: center;
+}
+TopBar .badge.warn {
+    color: #d9a441;
+}
+TopBar .badge.bad {
+    color: #c75450;
+}
+
+/* ----------------------------- QueryBar ----------------------------- */
+QueryBar {
+    height: 3;
+    dock: top;
+    padding: 0 1;
+    background: #14181f;        /* bg-soft */
+    border-bottom: solid #2a3140;
+}
+QueryBar > #query-meta {
+    color: #8a93a3;
+    padding: 0 1;
+}
+QueryBar > #hash-badge {
+    color: #4ddb9a;
+    border: solid #2f5f4a;
+    padding: 0 1;
+    margin: 0 0 0 1;
+}
+
+/* ----------------------------- Main split ----------------------------- */
+#main-split {
+    layout: grid;
+    grid-size: 2 1;
+    grid-columns: 2fr 1fr;
+    grid-rows: 1fr;
+    padding: 0 1;
+    height: 1fr;
+}
+
+/* ResultsTable panel */
+#results-panel {
+    border: solid #2a3140;
+    background: #14181f;
+    padding: 0 1 0 0;
+    min-width: 20;
+}
+#results-panel > .panel-h {
+    color: #6a7280;
+    padding: 1 1 0 1;
+    text-style: bold;
+}
+
+ResultsTable {
+    background: #14181f;
+}
+
+/* DetailPane */
+#detail-panel {
+    border: solid #2a3140;
+    background: #14181f;
+    padding: 1 1;
+    margin: 0 0 0 1;
+}
+#detail-panel > .panel-h {
+    color: #6a7280;
+    text-style: bold;
+}
+#detail-panel #detail-title {
+    color: #e6e9ef;
+    text-style: bold;
+    padding: 1 0 0 0;
+}
+#detail-panel #detail-movie {
+    color: #d9a441;             /* accent-2 amber */
+    padding: 0 0 1 0;
+}
+#detail-panel .kv-k {
+    color: #6a7280;
+}
+#detail-panel .kv-v {
+    color: #d8dde6;
+}
+#detail-panel .kv-v.good {
+    color: #4ddb9a;
+}
+#detail-panel .kv-v.warn {
+    color: #d9a441;
+}
+
+/* ----------------------------- StatusBar ----------------------------- */
+StatusBar {
+    height: 3;
+    dock: bottom;
+    padding: 0 1;
+    background: #181c24;
+    border-top: solid #2a3140;
+    color: #8a93a3;
+}
+StatusBar #sb-status {
+    color: #4ddb9a;
+    padding: 0 1 0 0;
+    text-style: bold;
+}
+StatusBar .sep {
+    color: #4a5260;
+    padding: 0 1;
+}
+StatusBar .sb-val {
+    color: #e6e9ef;
+}
+StatusBar #sb-hints {
+    color: #6a7280;
+    padding: 0 0 0 1;
+    text-align: right;
+    width: 1fr;
+}
+
+/* DataTable styling */
+DataTable {
+    background: #14181f;
+    color: #d8dde6;
+}
+DataTable > .datatable--header {
+    background: #14181f;
+    color: #6a7280;
+    text-style: bold;
+}
+DataTable > .datatable--cursor {
+    background: #1a2a24;
+    color: #e6e9ef;
+}
+DataTable > .datatable--hover {
+    background: #1a2030;
+}
+
+/* Error / empty-state callout */
+#empty-state {
+    color: #8a93a3;
+    padding: 1 2;
+    text-align: center;
+}
+#error-banner {
+    color: #c75450;
+    background: #2a1818;
+    padding: 0 1;
+    dock: top;
+    height: 1;
+}
