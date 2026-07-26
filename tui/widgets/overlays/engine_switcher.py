@@ -5,7 +5,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Checkbox, OptionList, Static
+from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
 from tui.domain import EngineMode, HealthResult, Provider
@@ -20,7 +20,7 @@ class EngineSwitcher(ModalScreen[tuple[EngineMode, bool] | None]):
     EngineSwitcher > Vertical {
         width: 72;
         max-width: 92%;
-        height: 17;
+        height: 18;
         background: #111820;
         border: round #75a7ff;
         padding: 1 2;
@@ -35,13 +35,9 @@ class EngineSwitcher(ModalScreen[tuple[EngineMode, bool] | None]):
         height: 2;
     }
     EngineSwitcher OptionList {
-        height: 6;
+        height: 9;
         border: none;
         background: #111820;
-    }
-    EngineSwitcher Checkbox {
-        height: 3;
-        margin-top: 1;
     }
     """
 
@@ -62,52 +58,54 @@ class EngineSwitcher(ModalScreen[tuple[EngineMode, bool] | None]):
         self.health = health
         self.merge_mode = merge_mode
         self.configured = configured if configured is not None else set(Provider)
-        self.modes = [
-            EngineMode.OPENSUBTITLES,
-            EngineMode.SUBDL,
-            EngineMode.SUBSOURCE,
-            EngineMode.AUTO,
+        self.choices = [
+            (EngineMode.OPENSUBTITLES, False),
+            (EngineMode.SUBDL, False),
+            (EngineMode.SUBSOURCE, False),
+            (EngineMode.AUTO, False),
+            (EngineMode.AUTO, True),
         ]
 
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static("Subtitle engine", classes="overlay-title")
             yield Static(
-                "Choose one provider, use Auto fallback, or merge all configured "
-                "providers.",
+                "Auto stops at the first source with matches. All providers "
+                "combines every configured source.",
                 classes="overlay-help",
             )
             yield OptionList(
                 *[
                     Option(
-                        self._label(mode),
-                        id=mode.value,
+                        self._label(mode, merge),
+                        id="all-providers" if merge else mode.value,
                         disabled=(
                             mode.provider is not None
                             and mode.provider not in self.configured
                         ),
                     )
-                    for mode in self.modes
+                    for mode, merge in self.choices
                 ],
                 id="engine-options",
-            )
-            yield Checkbox(
-                "Merge results from every configured provider",
-                value=self.merge_mode,
-                id="engine-merge",
             )
 
     def on_mount(self) -> None:
         options = self.query_one("#engine-options", OptionList)
+        target = (EngineMode.AUTO, True) if self.merge_mode else (self.current, False)
         try:
-            options.highlighted = self.modes.index(self.current)
+            options.highlighted = self.choices.index(target)
         except ValueError:
             options.highlighted = 0
         options.focus()
 
-    def _label(self, mode: EngineMode) -> str:
+    def _label(self, mode: EngineMode, merge: bool = False) -> str:
+        if merge:
+            return "All providers  ·  concurrent combined results"
         if mode is EngineMode.AUTO:
-            return "Auto fallback  ·  SubSource → OpenSubtitles → SubDL"
+            return (
+                "Auto fallback  ·  stops after first source with matches  ·  "
+                "SubSource → OpenSubtitles → SubDL"
+            )
         provider = mode.provider
         if provider not in self.configured:
             return f"{mode.label}  ·  credentials missing"
@@ -128,8 +126,7 @@ class EngineSwitcher(ModalScreen[tuple[EngineMode, bool] | None]):
         index = options.highlighted
         if index is None:
             return
-        merge = self.query_one("#engine-merge", Checkbox).value
-        self.dismiss((self.modes[index], merge))
+        self.dismiss(self.choices[index])
 
     def action_cancel(self) -> None:
         self.dismiss(None)

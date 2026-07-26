@@ -1,7 +1,7 @@
 import asyncio
 
 import pytest
-from textual.widgets import ContentSwitcher, Input, Static
+from textual.widgets import Button, ContentSwitcher, DataTable, Input, Static
 
 from tui.app import ConfirmConfigExit, ConfirmConfigSave, ConfirmQuit, SubsApp
 from tui.domain import Candidate, EngineMode, Provider, QueueStatus
@@ -93,6 +93,96 @@ def test_all_four_tabs_are_real_views(configured_app):
                     app.query_one("#workspace", ContentSwitcher).current
                     == f"{view}-view"
                 )
+
+    asyncio.run(run())
+
+
+def test_view_shortcuts_focus_each_primary_workspace(configured_app):
+    app, _ = configured_app
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause(0.3)
+            for key, selector in (
+                ("2", "#queue-table"),
+                ("3", "#history-table"),
+                ("4", "#config-engine"),
+                ("1", "#results-table"),
+            ):
+                await pilot.press(key)
+                await pilot.pause()
+                assert app.focused is app.query_one(selector)
+
+    asyncio.run(run())
+
+
+def test_escape_returns_query_focus_to_results(configured_app):
+    app, _ = configured_app
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause(0.3)
+            await pilot.press("slash")
+            assert isinstance(app.focused, Input)
+
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.focused is app.query_one(ResultsTable)
+
+    asyncio.run(run())
+
+
+def test_all_providers_choice_updates_engine_label_and_search_mode(configured_app):
+    app, coordinator = configured_app
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause(0.3)
+            app._engine_chosen((EngineMode.AUTO, True))
+            await pilot.pause()
+
+            assert app.merge_mode is True
+            assert app.application_config.general.merge_results is True
+            assert app.query_one("#chip-engine", Button).label == "All providers ▾"
+            assert coordinator.requests
+
+    asyncio.run(run())
+
+
+def test_repeated_view_switching_does_not_rebuild_unchanged_tables(
+    configured_app,
+):
+    app, _ = configured_app
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause(0.3)
+            tables = [
+                app.query_one(ResultsTable),
+                app.query_one("#queue-table", DataTable),
+                app.query_one("#history-table", DataTable),
+            ]
+            clear_counts = [0, 0, 0]
+            for index, table in enumerate(tables):
+                original_clear = table.clear
+
+                def tracked_clear(
+                    *args,
+                    _index=index,
+                    _clear=original_clear,
+                    **kwargs,
+                ):
+                    clear_counts[_index] += 1
+                    return _clear(*args, **kwargs)
+
+                table.clear = tracked_clear
+
+            for _ in range(8):
+                await pilot.press("2", "down", "3", "1", "down", "up")
+            await pilot.pause(0.1)
+
+            assert clear_counts == [0, 0, 0]
+            assert app.focused is app.query_one(ResultsTable)
 
     asyncio.run(run())
 
@@ -347,6 +437,7 @@ def test_config_draft_survives_refresh_and_blocks_accidental_navigation(
             assert app.state.engine_mode is original_engine
             assert app.state.language == original_language
             assert app.config_draft.general.preferred_backend is EngineMode.AUTO
+            assert app.config_draft.general.merge_results is False
             assert app.config_draft_language == "fr"
 
             app.notice = "background update"

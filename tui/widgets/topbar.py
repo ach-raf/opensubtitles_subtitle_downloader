@@ -39,7 +39,11 @@ class TopBar(Horizontal):
         config_button.label = "4 Config •" if config_dirty else "4 Config"
         config_button.set_class(config_dirty, "dirty")
         mode = app.state.engine_mode
-        engine_label = "Choose engine" if mode.value == "ask" else mode.label
+        engine_label = (
+            "All providers"
+            if app.merge_mode
+            else "Choose engine" if mode.value == "ask" else mode.label
+        )
         self.query_one("#chip-engine", Button).label = f"{engine_label} ▾"
         self.query_one("#chip-language", Button).label = (
             f"{app.state.language.upper()} ▾"

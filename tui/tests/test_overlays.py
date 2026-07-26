@@ -57,7 +57,7 @@ def test_language_popover_batch_requires_explicit_scope():
     assert _drive_screen(screen, ["down", "enter", "a"]) == ("ar", "all")
 
 
-def test_engine_switcher_shows_advisory_health_and_returns_merge():
+def test_engine_switcher_reopens_on_current_all_providers_choice():
     screen = EngineSwitcher(
         current=EngineMode.OPENSUBTITLES,
         health={
@@ -71,8 +71,8 @@ def test_engine_switcher_shows_advisory_health_and_returns_merge():
         merge_mode=True,
     )
 
-    assert _drive_screen(screen, ["down", "enter"]) == (
-        EngineMode.SUBDL,
+    assert _drive_screen(screen, ["enter"]) == (
+        EngineMode.AUTO,
         True,
     )
 
@@ -88,6 +88,32 @@ def test_engine_switcher_auto_is_selectable():
         screen,
         ["down", "down", "down", "enter"],
     ) == (EngineMode.AUTO, False)
+
+
+def test_engine_switcher_all_providers_is_a_first_class_choice():
+    screen = EngineSwitcher(
+        current=EngineMode.OPENSUBTITLES,
+        health={},
+        merge_mode=False,
+    )
+
+    assert _drive_screen(
+        screen,
+        ["down", "down", "down", "down", "enter"],
+    ) == (EngineMode.AUTO, True)
+
+
+def test_engine_switcher_explains_auto_stops_at_first_match():
+    screen = EngineSwitcher(
+        current=EngineMode.AUTO,
+        health={},
+        merge_mode=False,
+    )
+
+    assert "stops after first source with matches" in screen._label(
+        EngineMode.AUTO,
+        False,
+    )
 
 
 def test_palette_filters_and_returns_action():

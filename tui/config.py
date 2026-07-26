@@ -17,6 +17,7 @@ from tui.domain import EngineMode, Provider
 
 SUPPORTED_GENERAL_FIELDS = {
     "preferred_backend",
+    "merge_results",
     "skip_interactive_menu",
     "sync_audio_to_subs",
     "auto_selection",
@@ -31,6 +32,7 @@ SECRET_FIELDS = {"username", "password", "api_key", "user_agent"}
 @dataclass
 class GeneralConfig:
     preferred_backend: EngineMode = EngineMode.ASK
+    merge_results: bool = False
     skip_interactive_menu: bool = False
     sync_audio_to_subs: str = "ask"
     auto_selection: bool = False
@@ -148,6 +150,7 @@ class ConfigRepository:
             preferred_backend=_safe_mode(
                 general_raw.get("preferred_backend", EngineMode.ASK.value)
             ),
+            merge_results=bool(general_raw.get("merge_results", False)),
             skip_interactive_menu=bool(general_raw.get("skip_interactive_menu", False)),
             sync_audio_to_subs=normalize_sync_policy(
                 general_raw.get("sync_audio_to_subs", "ask")

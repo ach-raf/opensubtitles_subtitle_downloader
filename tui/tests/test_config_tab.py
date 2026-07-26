@@ -4,11 +4,13 @@ import yaml
 from textual.widgets import Input, Select, Switch
 
 from tui.app import ConfirmConfigSave, SubsApp
+from tui.domain import EngineMode
 from tui.widgets.views import ConfigView
 
 CONFIG_TEXT = """\
 general:
   preferred_backend: subdl
+  merge_results: false
   skip_interactive_menu: true
   sync_audio_to_subs: ask
   auto_selection: false
@@ -81,6 +83,7 @@ def test_config_save_round_trips_every_edited_field_atomically(tmp_path):
         async with app.run_test() as pilot:
             await pilot.press("4")
             await pilot.pause()
+            app._engine_chosen((EngineMode.AUTO, True))
             app.query_one("#config-sync", Select).value = "always"
             app.query_one("#config-hi", Select).value = "only"
             app.query_one("#config-skip", Switch).value = False
@@ -99,6 +102,8 @@ def test_config_save_round_trips_every_edited_field_atomically(tmp_path):
     asyncio.run(run())
     saved = yaml.safe_load(path.read_text(encoding="utf-8"))
     assert saved["general"]["sync_audio_to_subs"] is True
+    assert saved["general"]["preferred_backend"] == "auto"
+    assert saved["general"]["merge_results"] is True
     assert saved["general"]["hearing_impaired"] == "only"
     assert saved["general"]["skip_interactive_menu"] is False
     assert saved["general"]["no_tui"] is True

@@ -319,6 +319,7 @@ class SubsApp(App):
         Binding("r", "reprobe", "Re-probe", show=False),
         Binding("ctrl+k", "open_palette", "Commands", show=False),
         Binding("ctrl+s", "save_config", "Save config", show=False),
+        Binding("escape", "focus_workspace", "Back to workspace", show=False),
         Binding("question_mark", "help", "Help", show=False),
         Binding("q", "request_quit", "Quit", show=False),
     ]
@@ -361,6 +362,10 @@ class SubsApp(App):
             ).load()
             self._overlay_raw_config(self.raw_config)
         self._apply_overrides()
+        self.set_reactive(
+            SubsApp.merge_mode,
+            self.application_config.general.merge_results,
+        )
         self.config_draft = copy.deepcopy(self.application_config)
         self.config_draft_language = ""
         self._pending_config_draft: ApplicationConfig | None = None
@@ -430,6 +435,7 @@ class SubsApp(App):
     def _overlay_raw_config(self, raw: dict[str, Any]) -> None:
         general = raw.get("general") or {}
         for name in (
+            "merge_results",
             "skip_interactive_menu",
             "auto_selection",
             "opt_force_utf8",
@@ -474,6 +480,7 @@ class SubsApp(App):
     def _apply_overrides(self) -> None:
         if backend := self.overrides.get("backend"):
             self.application_config.general.preferred_backend = EngineMode(str(backend))
+            self.application_config.general.merge_results = False
         if self.overrides.get("lang"):
             self.application_config.general.skip_interactive_menu = True
 
@@ -614,7 +621,15 @@ class SubsApp(App):
     def _finish_view_change(self, view: str) -> None:
         self.state.active_view = view
         self.query_one("#workspace", ContentSwitcher).current = f"{view}-view"
-        self._refresh_all()
+        self._refresh_topbar()
+        {
+            "search": self._refresh_search,
+            "queue": self._refresh_queue,
+            "history": self._refresh_history,
+            "config": self._refresh_config,
+        }[view]()
+        self._refresh_status()
+        self.call_after_refresh(self.action_focus_workspace)
 
     def _config_exit_decided(self, decision: str | None, view: str) -> None:
         if decision == "discard":
@@ -625,10 +640,22 @@ class SubsApp(App):
 
     def action_focus_query(self) -> None:
         self.action_show_view("search")
-        self.query_one("#query-input", Input).focus()
+        self.call_after_refresh(lambda: self.query_one("#query-input", Input).focus())
+
+    def action_focus_workspace(self) -> None:
+        selector = {
+            "search": ("#results-table" if self.candidates else "#query-input"),
+            "queue": "#queue-table",
+            "history": "#history-table",
+            "config": "#config-engine",
+        }[self.state.active_view]
+        self.query_one(selector).focus()
 
     def action_cursor_down(self) -> None:
         if isinstance(self.focused, Input):
+            return
+        if isinstance(self.focused, DataTable):
+            self.focused.action_cursor_down()
             return
         if self.candidates:
             self.cursor_index = min(
@@ -638,6 +665,9 @@ class SubsApp(App):
 
     def action_cursor_up(self) -> None:
         if isinstance(self.focused, Input):
+            return
+        if isinstance(self.focused, DataTable):
+            self.focused.action_cursor_up()
             return
         self.cursor_index = max(0, self.cursor_index - 1)
 
@@ -688,6 +718,7 @@ class SubsApp(App):
         mode, merge = result
         if self.state.active_view == "config":
             self.config_draft.general.preferred_backend = mode
+            self.config_draft.general.merge_results = merge
             view = self.query_one(ConfigView)
             view.mark_dirty()
             view.refresh_from_state(self)
@@ -695,6 +726,7 @@ class SubsApp(App):
         self.merge_mode = merge
         self.state.choose_engine(mode)
         self.application_config.general.preferred_backend = mode
+        self.application_config.general.merge_results = merge
         self._refresh_all()
         if self.state.needs_language_setup:
             self.action_open_language()
@@ -1147,9 +1179,10 @@ class SubsApp(App):
             self._refresh_status()
             return
         preferred = draft.general.preferred_backend
+        merge_changed = draft.general.merge_results != self.merge_mode
         engine_changed = (
             preferred is not EngineMode.ASK and preferred is not self.state.engine_mode
-        )
+        ) or merge_changed
         language_changed = bool(language and language != self.state.language)
         if not self.config_path:
             self.notice = "Session updated; no config path was supplied"
@@ -1169,6 +1202,7 @@ class SubsApp(App):
             )
         self.application_config = copy.deepcopy(draft)
         self.config_draft = copy.deepcopy(draft)
+        self.merge_mode = draft.general.merge_results
         if preferred is not EngineMode.ASK:
             self.state.choose_engine(preferred)
         if language:

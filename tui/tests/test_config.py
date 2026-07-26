@@ -5,6 +5,7 @@ CONFIG_TEXT = """\
 # Keep this operator note
 general:
   preferred_backend: ask  # preferred provider
+  merge_results: false
   skip_interactive_menu: false
   sync_audio_to_subs: ask
   auto_selection: false
@@ -44,12 +45,15 @@ def test_config_repository_round_trips_supported_fields_atomically(tmp_path):
     repo = ConfigRepository(path)
     config = repo.load()
     config.general.preferred_backend = EngineMode.SUBDL
+    config.general.merge_results = True
     config.providers[Provider.SUBDL].languages["Japanese"] = "ja"
 
     diff = repo.save(config)
     reloaded = repo.load()
 
     assert reloaded.general.preferred_backend is EngineMode.SUBDL
+    assert reloaded.general.merge_results is True
+    assert "general.merge_results" in diff.changed_fields
     assert reloaded.providers[Provider.SUBDL].languages["Japanese"] == "ja"
     assert "subdl.languages.Japanese" in diff.changed_fields
     assert reloaded.extra["custom_section"]["untouched"] is True
@@ -77,4 +81,5 @@ def test_missing_config_loads_safe_defaults(tmp_path):
     config = ConfigRepository(tmp_path / "missing.yaml").load()
 
     assert config.general.preferred_backend is EngineMode.ASK
+    assert config.general.merge_results is False
     assert set(config.providers) == set(Provider)

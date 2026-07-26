@@ -7,12 +7,30 @@ class ResultsTable(DataTable):
     def __init__(self) -> None:
         super().__init__(id="results-table")
         self.cursor_type = "row"
+        self._rendered_signature: tuple | None = None
 
     def on_mount(self) -> None:
         for label in ("#", "Release", "Lang", "Provider", "Flags", "D/L", "Match"):
             self.add_column(label)
 
     def refresh_from_state(self, app) -> None:
+        signature = tuple(
+            (
+                candidate.key,
+                candidate.release,
+                candidate.language,
+                candidate.provider,
+                candidate.hash_match,
+                candidate.hearing_impaired,
+                candidate.ai_translated,
+                candidate.download_count,
+                candidate.score,
+            )
+            for candidate in app.candidates
+        )
+        if signature == self._rendered_signature:
+            self.sync_cursor(app.cursor_index)
+            return
         self.clear()
         for index, candidate in enumerate(app.candidates, 1):
             flags = []
@@ -32,6 +50,7 @@ class ResultsTable(DataTable):
                 f"{candidate.score:.0f}",
                 key=candidate.key,
             )
+        self._rendered_signature = signature
         if self.row_count:
             self.sync_cursor(app.cursor_index)
 

@@ -54,6 +54,10 @@ class SearchView(Container):
 
 
 class QueueView(Container):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._rendered_signature: tuple | None = None
+
     def compose(self) -> ComposeResult:
         yield Static("QUEUE", classes="view-title")
         yield Static(
@@ -72,6 +76,19 @@ class QueueView(Container):
             table.add_column(label)
 
     def refresh_from_state(self, app) -> None:
+        signature = tuple(
+            (
+                item.key,
+                item.path.name,
+                item.language,
+                item.engine_mode,
+                item.status,
+                item.error,
+            )
+            for item in app.state.queue
+        )
+        if signature == self._rendered_signature:
+            return
         table = self.query_one("#queue-table", DataTable)
         table.clear()
         for index, item in enumerate(app.state.queue, 1):
@@ -84,9 +101,14 @@ class QueueView(Container):
                 item.error or "",
                 key=item.key,
             )
+        self._rendered_signature = signature
 
 
 class HistoryView(Container):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._rendered_signature: tuple | None = None
+
     def compose(self) -> ComposeResult:
         yield Static("HISTORY", classes="view-title")
         yield Static(
@@ -111,6 +133,22 @@ class HistoryView(Container):
             table.add_column(label)
 
     def refresh_from_state(self, app) -> None:
+        signature = tuple(
+            (
+                entry.item_key,
+                entry.subtitle_path,
+                entry.error,
+                entry.postprocess.utf8_normalized,
+                entry.postprocess.cleaned,
+                entry.postprocess.synced,
+                entry.postprocess.utf8_error,
+                entry.postprocess.clean_error,
+                entry.postprocess.sync_error,
+            )
+            for entry in app.state.history
+        )
+        if signature == self._rendered_signature:
+            return
         table = self.query_one("#history-table", DataTable)
         table.clear()
         for entry in app.state.history:
@@ -129,6 +167,7 @@ class HistoryView(Container):
                 or "",
                 key=entry.item_key,
             )
+        self._rendered_signature = signature
 
 
 class ConfigView(Container):
@@ -200,7 +239,9 @@ class ConfigView(Container):
     def refresh_from_state(self, app) -> None:
         config = app.config_draft
         self.query_one("#config-engine", Button).label = (
-            config.general.preferred_backend.label
+            "All providers"
+            if config.general.merge_results
+            else config.general.preferred_backend.label
         )
         self.query_one("#config-language", Button).label = (
             app.config_draft_language.upper()
