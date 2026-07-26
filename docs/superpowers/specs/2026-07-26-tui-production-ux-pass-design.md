@@ -6,15 +6,19 @@
 
 ## 1. Goal
 
-Turn the current Textual command deck into a complete, production-quality
-subtitle workflow. The result must expose the choices users already have,
-support both keyboard and mouse interaction, process multi-file queues
-correctly, persist every editable setting it presents, and pass modern Python
-linting without deprecated `typing` aliases.
+Turn the current Textual command deck and every execution path introduced with
+it into a complete, production-quality subtitle workflow. The result must
+expose the choices users already have, support both keyboard and mouse
+interaction, process multi-file queues correctly, merge provider results
+without corruption, dispatch downloads to the correct provider, persist every
+editable setting it presents, and pass modern Python linting without deprecated
+`typing` aliases.
 
-The existing backend adapters and most of `tui/services.py` remain the
-foundation. The presentation and orchestration layers are rebuilt where their
-current structure prevents the approved experience.
+The established `library/*` provider implementations and scoring algorithms
+remain available behind new typed adapters. `tui/services.py`, `tui/app.py`,
+and the widget layer are replaced or substantially rewritten wherever their
+current contracts are untrustworthy. Passing tests written around the current
+implementation are not treated as proof of correct provider integration.
 
 ## 2. Audit Findings
 
@@ -41,6 +45,50 @@ UX specification:
   `typing.Optional` usage throughout the TUI.
 - Existing tests validate many methods in isolation but do not cover the
   broken visible shortcuts, clipping, tab navigation, or queue progression.
+- `preferred_backend: ask` cannot survive configuration loading because the TUI
+  `Backend` enum has no `ASK` state. It silently becomes OpenSubtitles.
+- With interaction enabled, the TUI silently takes the first merged language
+  instead of presenting the engine and language choices the legacy workflow
+  presents.
+- Directory arguments are queued as one fake media item instead of being
+  expanded into supported media files.
+- The search and download workers are constructed before configuration is
+  translated into a `RunPolicy`. They retain default policy objects, so the
+  policy visible in the UI is not the policy used by provider clients.
+- Editing a run policy does not invalidate or update cached provider clients.
+- The merge implementation is sequential despite being specified as parallel.
+- Merge deduplicates on raw provider IDs. The same numeric/string ID from two
+  providers causes valid candidates to be discarded.
+- A merged result is tagged with `_source`, but download dispatch ignores that
+  source and uses the globally selected backend. A SubDL or SubSource row can
+  therefore be sent to OpenSubtitles for download.
+- Health state is used as a hard merge gate even though the probe can produce
+  false negatives. A live configured OpenSubtitles search succeeded while the
+  current probe labelled OpenSubtitles degraded.
+- AUTO routing differs from the legacy provider priority and falls back to
+  OpenSubtitles without attempting another provider after an empty or failed
+  search.
+- Provider errors are frequently converted to empty lists inside `library/*`,
+  so the TUI cannot distinguish “zero matches” from “request failed.”
+- Search results are untyped dictionaries containing provider-private payloads.
+  A live SubDL candidate contained an API key in its download URL. Such values
+  must never reach preview, clipboard, logs, history, or exported state.
+- The visible query is ignored by the search service, which always derives its
+  term from `Path(media_path).stem`.
+- `show_ai_translated`, hearing-impaired mode, alternate-name behavior, and
+  other displayed policies are inconsistent across providers or unused.
+- Auto-selection is displayed and loaded but does not drive the TUI workflow.
+- Search and download use separate provider client caches; OpenSubtitles may
+  authenticate twice in one session.
+- Post-processing runs from a UI callback and can block Textual while syncing.
+- `SubtitleUtils.clean_subtitles` and `sync_subtitles` swallow exceptions, but
+  the TUI marks the operation successful whenever those helpers return.
+- The configured ads file path is displayed and saved but is not passed to the
+  cleaner.
+- Configuration writes are non-atomic PyYAML rewrites that drop comments,
+  despite comments claiming preservation support.
+- Installing the unpinned requirements currently produces an incompatible
+  Requests/chardet warning.
 
 ## 3. Design Principles
 
@@ -63,15 +111,15 @@ UX specification:
 
 ### 4.1 State ownership
 
-`SubsApp` owns one coherent `AppState`-compatible session:
+`SubsApp` owns one coherent typed session state:
 
 - active view;
 - active queue item;
 - queue and history;
-- engine and merge mode;
-- selected language;
+- engine mode (`ask`, concrete provider, or `auto`) and merge mode;
+- selected language and per-item language overrides;
 - per-engine configured languages;
-- search results and selected result;
+- typed search candidates and selected candidate key;
 - run policy;
 - engine health;
 - transient notice or error.
@@ -82,15 +130,27 @@ backend libraries.
 
 ### 4.2 Service boundary
 
-`tui/services.py` remains the only TUI module that calls `library/*`.
-Production changes to it are limited to behavior needed by the UX:
+The monolithic worker classes in `tui/services.py` are replaced with four
+explicit boundaries:
 
-- engine-aware language resolution;
-- complete configuration round trips;
-- policy filtering;
-- deterministic queue/download results;
-- accurate health summaries;
-- typed result objects where raw tuples currently obscure intent.
+1. **Provider adapters** — one adapter each for OpenSubtitles, SubDL, and
+   SubSource. They convert provider responses into typed candidates, retain
+   secret download payloads privately, expose truthful success/error results,
+   and dispatch downloads through the provider that created the candidate.
+2. **Search coordinator** — plans concrete-provider, AUTO, and merge searches;
+   applies shared filters and ranking; combines warnings and candidates.
+3. **Job coordinator** — owns queue progression, download jobs, post-processing
+   jobs, retry, skip, and history creation.
+4. **Configuration repository** — validates, diffs, and atomically saves the
+   complete supported configuration without exposing secrets.
+
+Widgets and application state never receive raw provider response objects,
+authenticated URLs, credentials, or backend client instances.
+
+The adapters may call existing public provider methods or introduce narrow
+public methods in `library/*` when the only available implementation is a
+private `_gather_candidates` method. Provider algorithms are not duplicated
+inside the TUI.
 
 ### 4.3 Views and overlays
 
@@ -107,6 +167,22 @@ The main application contains four real views:
 Language picker, engine picker, command palette, help, scope confirmation,
 post-download decision, save confirmation, and quit confirmation remain
 overlays because they temporarily interrupt the current view.
+
+### 4.4 Typed integration objects
+
+The service boundary uses explicit data objects:
+
+- `SearchRequest`: media path, effective query, language, policy;
+- `Candidate`: stable key, provider, provider ID, normalized display metadata,
+  shared score, and an opaque private download reference;
+- `ProviderSearchResult`: candidates plus provider warning/error state;
+- `DownloadResult`: provider, exact saved path, overwrite decision, and error;
+- `PostProcessResult`: clean and sync outcomes represented independently;
+- `HealthResult`: configured, reachable, authenticated, latency, and reason.
+
+A candidate key is namespaced as `<provider>:<provider-id>`. Candidates without
+a trustworthy provider ID receive a deterministic provider-scoped fingerprint
+instead of being silently discarded.
 
 ## 5. Navigation and Layout
 
@@ -137,6 +213,10 @@ the entire view.
 At wide widths, results and detail sit side by side. At compact widths, the
 detail pane is hidden and its information is available through preview.
 
+The selected table row is keyed by `Candidate.key`. Keyboard movement,
+DataTable cursor movement, and mouse row selection all update the same selected
+key, so downloads cannot target a different row from the one highlighted.
+
 ### 5.3 Footer
 
 The footer has two stable zones:
@@ -163,6 +243,10 @@ It lists OpenSubtitles, SubDL, SubSource, and Auto with:
 Unavailable engines remain visible with the reason they cannot be selected.
 `r` re-probes. `m` toggles merge mode and returns that change to the app.
 
+`ask` remains a real startup state. When `preferred_backend: ask` is configured
+and no CLI override is supplied, the engine picker opens before the first
+search. It is never silently coerced to OpenSubtitles.
+
 ### 6.2 Language picker
 
 Lowercase `l`, the language chip, and the command palette open the picker.
@@ -186,11 +270,75 @@ Changing language during a batch opens a scope choice:
 The chosen scope updates per-item queue settings rather than only changing a
 global field.
 
-## 7. Queue and Batch Processing
+When interactive startup is enabled and no `--lang` override is supplied, the
+language picker opens after engine selection. `skip_interactive_menu: true`
+uses the configured provider and its first configured language, matching the
+legacy escape-hatch behavior.
+
+## 7. Cross-Provider Search and Merge
+
+### 7.1 Concrete-provider search
+
+A concrete provider receives one `SearchRequest` and returns either candidates,
+a truthful zero-result response, or an error. Shared AI/HI filters and ranking
+run after normalization so their semantics do not vary by provider.
+
+### 7.2 AUTO
+
+AUTO starts with the legacy provider priority—SubSource, OpenSubtitles, then
+SubDL—adjusted only to skip unconfigured providers and prefer a provider with
+positive recent health. Health is advisory rather than a hard gate. AUTO tries
+providers until one returns usable candidates; an empty or failed first
+provider does not force an empty screen when another configured provider can
+answer.
+
+The UI reports which providers were attempted and why AUTO selected the final
+one.
+
+### 7.3 Merge
+
+Merge launches one isolated provider search per configured provider
+concurrently, with a maximum of three provider jobs. One provider failure does
+not cancel successful providers. The result surface reports partial failure
+instead of presenting an incomplete union as complete.
+
+Deduplication is provider-scoped:
+
+- repeated search passes from one provider collapse on namespaced candidate
+  key;
+- candidates from different providers remain independently downloadable even
+  if their raw IDs or release names match.
+
+Results share one normalized ranking algorithm and deterministic tie-breakers.
+Provider download counts are displayed but are not treated as directly
+comparable across services.
+
+Selecting a merged candidate always dispatches through
+`candidate.provider`. The globally selected engine is not consulted during
+download dispatch.
+
+### 7.4 Secret handling
+
+Authenticated provider URLs and opaque download references are adapter-private.
+Copy URL copies a public subtitle page only when a provider supplies one
+without credentials. Otherwise the action is disabled with an explanation.
+Logs and errors redact known credential values and sensitive query parameters.
+
+## 8. Queue and Batch Processing
 
 Every `QueueItem` stores the effective engine and language used for that item.
 The app derives the active item from the first non-terminal queue entry, never
 from `media_paths[0]`.
+
+Before the app mounts, path expansion:
+
+- accepts individual supported media files;
+- expands a supplied directory using the same non-recursive semantics as the
+  legacy workflow;
+- filters unsupported paths;
+- removes duplicate resolved paths while preserving deterministic order;
+- reports empty directories and unsupported inputs instead of searching their
+  names as media titles.
 
 Normal progression is:
 
@@ -206,7 +354,15 @@ A failure stops only that item. The Queue view offers retry and skip. Batch
 completion shows a concise summary of successes, failures, cleaned files, and
 synced files.
 
-## 8. Configuration
+Auto-selection uses the same ranked candidates shown in Search. When enabled,
+the top candidate is chosen and the decision is recorded in History. It does
+not use a separate provider-specific selector with different ranking.
+
+Download, clean, and sync run off the Textual event loop. Post-processing
+outcomes are recorded only from helpers that return success explicitly or
+raise on failure. A configured ads file path is passed to the cleaner.
+
+## 9. Configuration
 
 Config is a full view, not a modal. It groups:
 
@@ -215,19 +371,24 @@ Config is a full view, not a modal. It groups:
 - search filters: hearing-impaired policy and AI-translated visibility;
 - engine setup: configured status and language mappings for each backend.
 
-Search behaviors not supported by the backend implementation are not exposed
-as pretend settings. Any new supported keys are documented in
-`config.yaml.sample`.
+Existing keys retain their legacy meaning. Search behaviors not supported by
+the coordinated implementation are not exposed as pretend settings.
+Session-only filters are labelled session-only. Any newly persisted supported
+keys are documented in `config.yaml.sample` with backward-compatible defaults.
 
 Edits update a local draft. `Ctrl+S` presents a compact field-level diff,
 writes atomically after confirmation, refreshes the app's live policy, and
 clears the dirty marker. Escape or switching views with unsaved edits asks
 whether to discard them.
 
+Saving a provider or policy change invalidates only the affected adapter/client
+state. The visible session state and the policy used by active jobs cannot
+diverge silently.
+
 Credentials are never printed in full. Config may report missing credentials
 or offer a masked presence indicator, but secret editing is outside this pass.
 
-## 9. Command Palette and Help
+## 10. Command Palette and Help
 
 The palette is generated from the same action registry used by bindings and
 click handlers. It indexes:
@@ -243,7 +404,7 @@ click handlers. It indexes:
 Entries that cannot currently run are disabled with a reason. Help renders the
 same registry grouped by context, preventing documentation drift.
 
-## 10. Error Handling
+## 11. Error Handling
 
 - Invalid or missing configuration opens a readable fatal screen with the
   exact path and parser error.
@@ -255,8 +416,14 @@ same registry grouped by context, preventing documentation drift.
 - Quit during active work or with unsaved configuration requires confirmation.
 - Expected lifecycle races catch specific Textual query/lifecycle exceptions;
   unexpected exceptions are logged rather than silently swallowed.
+- Partial merge failures name the failed providers while retaining successful
+  results.
+- Provider error and zero-result states remain distinct through every service
+  boundary.
+- Existing subtitle target conflicts require an explicit replace or cancel
+  decision; downloads are not silently overwritten.
 
-## 11. Code Quality
+## 12. Code Quality
 
 - Use built-in generics (`dict`, `list`, `tuple`) and `X | None`.
 - Import callables from `collections.abc`.
@@ -265,9 +432,11 @@ same registry grouped by context, preventing documentation drift.
 - Prefer small typed messages/result objects to unstructured callback tuples.
 - Add a Ruff configuration that reflects the supported Python version and run
   it across the changed Python surface.
+- Pin or constrain dependencies so a clean requirements installation does not
+  produce the current Requests/chardet compatibility warning.
 - Preserve unrelated user changes and the legacy CLI escape hatch.
 
-## 12. Testing and Verification
+## 13. Testing and Verification
 
 Implementation follows test-first red/green/refactor cycles.
 
@@ -278,11 +447,20 @@ Automated coverage includes:
 - engine and language rows rendered from real config structures;
 - engine-specific and merge-mode language availability;
 - merge toggle propagation;
+- raw provider-ID collision across two or more engines;
+- source-aware download dispatch for every provider in merged results;
+- provider-private download references never appearing in display/log objects;
+- successful provider search despite a failed advisory health probe;
+- partial merge failure with successful results retained;
+- AUTO fallback after provider error and after truthful zero results;
+- configured run policy reaching adapters and cached-client invalidation;
 - query submission;
 - real view switching and dirty-config safeguards;
 - complete configuration round-trip;
+- directory expansion and unsupported-path reporting;
 - active-item selection and multi-file queue advancement;
 - download failure, retry, skip, and batch completion;
+- truthful clean/sync failure reporting and ads-path propagation;
 - preview, copy URL, help, and safe quit;
 - palette/action-registry consistency;
 - compact and wide layout composition.
@@ -293,16 +471,20 @@ Final verification runs:
 - Ruff on the changed Python surface;
 - formatting checks;
 - `git diff --check`;
+- adapter contract tests using captured, sanitized provider response fixtures;
+- a live opt-in smoke check for each configured provider that reports counts and
+  statuses without downloading subtitles or printing credentials;
 - Textual screenshot capture for main view and every overlay at wide and
   compact terminal sizes;
 - a manual no-network smoke run using deterministic fake services.
 
-## 13. Non-Goals
+## 14. Non-Goals
 
-- Rewriting `library/*` subtitle algorithms.
+- Rewriting subtitle matching, archive selection, or synchronization algorithms
+  that predate the TUI, except where a narrow public/result contract is needed
+  to prevent the TUI from misreporting their outcome.
 - Adding a new subtitle provider.
 - Replacing the legacy `--no-tui` workflow.
 - Editing or displaying credentials in full.
 - Pixel-perfect bidirectional terminal shaping beyond correct UTF-8 content.
 - A GUI or web application.
-
