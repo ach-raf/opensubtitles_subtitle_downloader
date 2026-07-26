@@ -17,6 +17,9 @@ styles.css
 webviewtest.py
 test*.py
 *test.py
+# Keep the TUI test-suite tracked despite the broad test*.py / *test.py rules above.
+!tui/tests/
+!tui/tests/**
 ttt.py
 subDl_download.py
 sub_downloader.py
