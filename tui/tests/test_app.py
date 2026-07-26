@@ -291,6 +291,43 @@ def test_cursor_change_does_not_rebuild_results_table(configured_app):
     asyncio.run(run())
 
 
+def test_rapid_cursor_input_does_not_replay_stale_highlights(configured_app):
+    app, coordinator = configured_app
+    coordinator.candidates = [
+        Candidate(
+            provider=Provider.SUBDL,
+            provider_id=str(index),
+            release=f"Release {index:02d}",
+            language="ar",
+            score=100 - index,
+        )
+        for index in range(40)
+    ]
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause(0.3)
+            table = app.query_one(ResultsTable)
+            move_count = 0
+            original_move = table.move_cursor
+
+            def tracked_move(*args, **kwargs):
+                nonlocal move_count
+                move_count += 1
+                return original_move(*args, **kwargs)
+
+            table.move_cursor = tracked_move
+            for _ in range(25):
+                table.action_cursor_down()
+            await pilot.pause(0.1)
+
+            assert table.cursor_row == 25
+            assert app.cursor_index == 25
+            assert move_count <= 25
+
+    asyncio.run(run())
+
+
 def test_enter_downloads_highlighted_result_from_focused_table(configured_app):
     app, _ = configured_app
     selected = []

@@ -1074,6 +1074,8 @@ class SubsApp(App):
 
     @on(DataTable.RowHighlighted, "#results-table")
     def on_result_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        if event.cursor_row != self.query_one(ResultsTable).cursor_row:
+            return
         self.cursor_index = event.cursor_row
 
     @on(DataTable.RowSelected, "#results-table")
