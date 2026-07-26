@@ -63,6 +63,8 @@ def default_actions() -> List[Action]:
                run=lambda app: app.exit()),
         Action("app.palette", "Open command palette", "action", "⌘K",
                run=lambda app: app.action_open_palette()),
+        Action("config.open", "Open Config (settings + save to config.yaml)", "setting", "4",
+               run=lambda app: app.action_open_config()),
     ]
 
 

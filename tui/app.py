@@ -35,6 +35,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container
 from textual.reactive import reactive
+from textual.screen import ModalScreen
 from textual.widgets import Static
 
 from tui.keymap import Keymap
@@ -55,6 +56,7 @@ from tui.state import (
     RunPolicy,
     native_name,
 )
+from tui.widgets.config_tab import ConfigTab
 from tui.widgets.detail_pane import DetailPane
 from tui.widgets.overlays.engine_switcher import EngineSwitcher
 from tui.widgets.overlays.lang_popover import LanguagePopover
@@ -88,6 +90,7 @@ class SubsApp(App):
         Binding("m", "toggle_merge", "Merge", show=False),
         Binding("r", "reprobe", "Re-probe", show=False),
         Binding("ctrl+k", "open_palette", "Palette", show=False),
+        Binding("4", "open_config", "Config", show=False),
     ]
 
     # ---- Source-of-truth reactives (Phase 2 subset) -----------------------
@@ -424,6 +427,80 @@ class SubsApp(App):
             logger.exception("palette action %s failed", action.id)
             self._notify(f"{action.label} failed: {exc}", severity="error")
 
+    def action_open_config(self) -> None:
+        """Push the Config settings rail."""
+        screen = ConfigTab(
+            policy=self.run_policy,
+            ads_file_path=self.run_policy.ads_file_path,
+        )
+        self.push_screen(screen, self._on_config_result)
+
+    def _on_config_result(self, result) -> None:
+        """Apply the edited RunPolicy, then prompt a one-line diff before save."""
+        if not result or result[0] != "save":
+            return  # cancel
+        new_policy: RunPolicy = result[1]
+        if new_policy is None:
+            return
+        # Compute the diff from the CURRENT (pre-assignment) policy first, so
+        # the comparison actually sees the change.
+        diff = self._config_diff_summary(new_policy)
+
+        # Update the live reactive so the StatusBar mirrors the new settings.
+        self.run_policy = new_policy
+
+        if not diff:
+            self._notify("config.yaml: no changes")
+            return
+        # Confirm modal: writes on yes, cancels on no.
+        self.push_screen(
+            _ConfirmScreen(f"Write to config.yaml?\n[dim]{diff}[/]"),
+            lambda confirmed: self._on_save_confirm(confirmed, new_policy),
+        )
+
+    def _config_diff_summary(self, new_policy: RunPolicy) -> str:
+        """One-line summary of what would change, without touching disk.
+
+        Compares against ``self.run_policy`` (the value BEFORE assignment in the
+        caller), so call this before mutating the reactive.
+        """
+        if not self.config_path:
+            return "(no config path — changes apply this session only)"
+        try:
+            changes: List[str] = []
+            old = self.run_policy
+            if old.force_utf8 != new_policy.force_utf8:
+                changes.append("opt_force_utf8")
+            if old.audio_sync != new_policy.audio_sync:
+                changes.append("sync_audio_to_subs")
+            if old.auto_select != new_policy.auto_select:
+                changes.append("auto_selection")
+            if (old.ads_file_path or "") != (new_policy.ads_file_path or ""):
+                changes.append("ads.file_path")
+            if not changes:
+                return ""
+            return "config.yaml: " + ", ".join(changes)
+        except Exception as exc:  # noqa: BLE001
+            return f"(diff unavailable: {exc})"
+
+    def _on_save_confirm(self, confirmed, new_policy: RunPolicy) -> None:
+        if not confirmed:
+            self._notify("save cancelled")
+            return
+        if not self.config_path:
+            self._notify("changes apply this session only (no config path)")
+            return
+        try:
+            from tui.services import ConfigIO
+
+            snap = self._snapshot_state()
+            snap.run_policy = new_policy
+            summary = ConfigIO.save(snap, self.config_path)
+            self._notify(summary)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("config save failed")
+            self._notify(f"save failed: {exc}", severity="error")
+
     def action_toggle_merge(self) -> None:
         self.merge_mode = not self.merge_mode
 
@@ -631,6 +708,54 @@ class SubsApp(App):
         merged = dict(self.engine_health)
         merged.update(health)
         self.engine_health = merged
+
+
+class _ConfirmScreen(ModalScreen):
+    """Tiny yes/no confirmation modal used by the Config save-back flow."""
+
+    DEFAULT_CSS = """
+    _ConfirmScreen {
+        align: center middle;
+    }
+    _ConfirmScreen > Vertical {
+        width: 60;
+        max-width: 90%;
+        background: #0f131a;
+        border: solid #d9a441;
+        padding: 1 2;
+    }
+    _ConfirmScreen #cf-msg {
+        color: #d8dde6;
+        padding: 0 0 1 0;
+    }
+    _ConfirmScreen #cf-foot {
+        color: #6a7280;
+    }
+    """
+
+    BINDINGS = [
+        Binding("y", "yes", "Yes", show=False),
+        Binding("n", "no", "No", show=False),
+        Binding("escape", "no", "No", show=False),
+        Binding("enter", "yes", "Yes", show=False),
+    ]
+
+    def __init__(self, message: str) -> None:
+        super().__init__()
+        self._message = message
+
+    def compose(self) -> ComposeResult:
+        from textual.containers import Vertical
+        yield Vertical(
+            Static(self._message, id="cf-msg", markup=True),
+            Static("[dim][b]y[/b]/↵ confirm   [b]n[/b]/esc cancel[/]", id="cf-foot", markup=True),
+        )
+
+    def action_yes(self) -> None:
+        self.dismiss(True)
+
+    def action_no(self) -> None:
+        self.dismiss(False)
 
 
 def run_tui(
