@@ -342,12 +342,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--tui",
         action="store_true",
-        help="Launch the Textual TUI (opt-in through Phase 5; default in Phase 6).",
+        help="Force the Textual TUI even if general.no_tui is set in config.",
     )
     parser.add_argument(
         "--no-tui",
         action="store_true",
-        help="Force the legacy numbered-prompt CLI even if TUI is the default.",
+        help="Force the legacy numbered-prompt CLI (the pre-TUI behaviour).",
     )
     parser.add_argument(
         "--lang",
@@ -371,9 +371,31 @@ def main() -> None:
     args = parser.parse_args()
     media_paths: List[str] = list(args.paths)
 
-    # TUI is opt-in for Phases 0-5; --no-tui and the absence of --tui both run
-    # the legacy CLI. Phase 6 flips this so TUI is the default.
-    use_tui = args.tui and not args.no_tui
+    # Read config once so we can honor general.no_tui AND seed the TUI.
+    config: Dict = {}
+    try:
+        with open(CONFIG_FILE_PATH, "r", encoding="utf-8") as fh:
+            config = yaml.safe_load(fh) or {}
+    except FileNotFoundError:
+        # Config missing — fall back to the legacy CLI which prints its own
+        # error (preserving the pre-TUI behaviour).
+        run_legacy(CONFIG_FILE_PATH, media_paths)
+        return
+    except yaml.YAMLError as exc:
+        console.print(f"[bold red]Error: Invalid YAML in config file: {exc}[/]")
+        sys.exit(1)
+
+    # Phase 6: the TUI is now the DEFAULT. Escape hatches:
+    #   --no-tui flag, or general.no_tui: true in config.yaml.
+    #   --tui overrides general.no_tui (explicit user intent wins).
+    #   (The legacy numbered-menu CLI is still fully functional behind these.)
+    config_no_tui = bool(config.get("general", {}).get("no_tui", False))
+    if args.no_tui:
+        use_tui = False
+    elif args.tui:
+        use_tui = True
+    else:
+        use_tui = not config_no_tui
 
     if not use_tui:
         run_legacy(CONFIG_FILE_PATH, media_paths)
@@ -382,19 +404,6 @@ def main() -> None:
     # --- TUI path ---
     # Lazy import so the legacy path (and --help) never requires textual.
     from tui.app import run_tui
-
-    config: Dict = {}
-    try:
-        with open(CONFIG_FILE_PATH, "r", encoding="utf-8") as fh:
-            config = yaml.safe_load(fh) or {}
-    except FileNotFoundError:
-        console.print(
-            f"[bold red]Error: Config file not found at {CONFIG_FILE_PATH}[/]"
-        )
-        sys.exit(1)
-    except yaml.YAMLError as exc:
-        console.print(f"[bold red]Error: Invalid YAML in config file: {exc}[/]")
-        sys.exit(1)
 
     if not media_paths:
         console.print("[bold red]Error: No media paths provided. Exiting...[/]")

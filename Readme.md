@@ -38,6 +38,36 @@ python download_subs.py path/to/your/movie.mkv
 
 For detailed installation instructions, alternative methods, and configuration options, see the [Installation](#-installation) section below.
 
+## 🖥️ TUI mode (default)
+
+`download_subs.py` opens a full-screen **Textual TUI** — a keyboard-first "command deck" — by default. One screen shows results, and the chrome itself is the control surface: change language, switch engine, and pick post-download actions **without quitting**.
+
+```bash
+python download_subs.py movie.mkv            # opens the TUI
+python download_subs.py movie.mkv --no-tui   # force the legacy numbered-prompt CLI
+```
+
+Set `general.no_tui: true` in `config.yaml` to make the legacy CLI the default (handy for headless / Send-To batch use); `--tui` overrides it for a single run.
+
+### Keybindings
+
+| Key | Action |
+|---|---|
+| `j` / `k` or `↑` / `↓` | Move cursor in the results table |
+| `↵` | Download the highlighted row |
+| `/` | Focus the query / filter input |
+| `L` | Open the language popover (native names; scope-confirm if a batch is in flight) |
+| `B` | Open the engine switcher (OpenSubtitles / SubDL / SubSource / Auto, with health + latency) |
+| `m` | Toggle merge mode (fan out to all engines, dedupe, re-score) |
+| `r` | Re-probe engine health + latency |
+| `4` | Open Config (live toggles; `ctrl+s` writes back to `config.yaml`) |
+| `ctrl+k` | Command palette — fuzzy-search every action |
+| `q` | Quit |
+
+Post-download toast keys (`↵` `c` `s` `d` `A` `esc`) are local to the toast. The toast auto-picks your default (Clean + Sync / Clean) after 5 seconds **only** when `sync_audio_to_subs` is `always` or `never`; when it's `ask`, the toast waits for a keypress.
+
+The legacy numbered-prompt CLI (`SubtitleDownloader`) is preserved behind `--no-tui` and is unchanged — existing scripts and `Send To` batch files keep working.
+
 ## 📥 Installation
 
 ### Prerequisites
@@ -128,11 +158,12 @@ Rename `config.yaml.sample` to `config.yaml` and configure the following section
 
 ```yaml
 general:
-  preferred_backend: subdl # Options: opensubtitles, subdl, auto, ask
+  preferred_backend: subdl # Options: opensubtitles, subdl, subsource, auto, ask
   skip_interactive_menu: false # Options: true, false
   sync_audio_to_subs: true # Options: true, false, ask
   auto_selection: false # Options: true, false
   opt_force_utf8: true # Options: true, false
+  no_tui: false # Options: true, false. false (default) = TUI; true = legacy numbered CLI
 ```
 
 ### OpenSubtitles Configuration

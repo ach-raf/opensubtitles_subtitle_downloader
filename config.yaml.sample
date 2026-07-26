@@ -4,7 +4,7 @@ general:
   sync_audio_to_subs: ask # Options: true, false, ask
   auto_selection: false
   opt_force_utf8: true
-  no_tui: false # Options: true, false. true = always use the legacy numbered CLI; false = TUI is the default (TUI becomes default in Phase 6). Set true for headless / Send-To batch use.
+  no_tui: false # Options: true, false. The Textual TUI is the default; set true to always use the legacy numbered-prompt CLI instead (for headless / Send-To batch use). Override per-run with --tui / --no-tui.
 
 opensubtitles:
   username: opensubtitles_username
