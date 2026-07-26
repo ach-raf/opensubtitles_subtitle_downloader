@@ -1,0 +1,696 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Command Deck · live controls</title>
+<!--
+  Hallmark · macrostructure: live state walk-through (single product, multiple states)
+  · theme: Terminal (atmospheric cluster) · tone: technical
+  · axis: dark / mono / phosphor-green + amber
+  Refinement of Direction A (Command Deck) with the user's QoL asks:
+    1. change language while running
+    2. switch engine (OpenSubtitles / SubDL / SubSource) while running
+    3. post-download inline choices (clean / sync / both / done)
+    4. all the existing config choices, surfaced as live toggles
+  Every glyph maps 1:1 to a Textual widget.
+-->
+<style>
+  :root {
+    --bg:        oklch(16% 0.012 250);
+    --bg-soft:   oklch(20% 0.014 250);
+    --bg-panel:  oklch(13% 0.014 250);
+    --bg-elev:   oklch(18% 0.016 250);
+    --rule:      oklch(32% 0.02 250);
+    --rule-soft: oklch(24% 0.012 250);
+    --ink:       oklch(90% 0.01 250);
+    --ink-dim:   oklch(62% 0.012 250);
+    --ink-faint: oklch(44% 0.01 250);
+    --accent:    oklch(80% 0.16 145);
+    --accent-2:  oklch(82% 0.13 75);
+    --accent-3:  oklch(72% 0.17 250);
+    --warn:      oklch(78% 0.16 55);
+    --bad:       oklch(70% 0.19 25);
+
+    --mono: "JetBrains Mono","Cascadia Code","SF Mono","Consolas","Noto Sans Mono",ui-monospace,monospace;
+    --arabic: "Noto Naskh Arabic","Scheherazade New","Segoe UI",serif;
+    --cjk: "Noto Sans SC","Microsoft YaHei","PingFang SC",sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin:0; padding:0; background: oklch(10% 0.01 250); color: var(--ink); font-family: var(--mono); -webkit-font-smoothing: antialiased; }
+  body { padding: 28px 0 64px; }
+  .frame { width: min(1280px, 94vw); margin: 0 auto; }
+
+  header.intro { padding: 0 0 22px; border-bottom: 1px solid var(--rule); margin-bottom: 28px; }
+  .kicker { font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink-faint); }
+  h1 { font: 700 22px/1.2 var(--mono); margin: 10px 0 6px; }
+  .lede { font-size: 13px; color: var(--ink-dim); max-width: 82ch; line-height: 1.65; }
+  .lede b { color: var(--ink); }
+  .lede .pill { font-size: 11px; padding: 1px 7px; border: 1px solid var(--rule); border-radius: 2px; color: var(--accent); margin: 0 2px; }
+
+  section { margin-bottom: 44px; }
+  .sec-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 16px; }
+  .sec-num { font-size: 10px; letter-spacing: 0.2em; color: var(--ink-faint); border: 1px solid var(--rule); padding: 2px 8px; border-radius: 2px; }
+  .sec-title { font: 600 16px/1.2 var(--mono); }
+  .sec-sub { color: var(--ink-dim); font-size: 12px; margin-left: auto; }
+
+  /* ---- terminal shell ---- */
+  .term { background: var(--bg-panel); border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; font-size: 13px; line-height: 1.55; box-shadow: 0 1px 0 oklch(0% 0 0 / 0.4), 0 18px 40px oklch(0% 0 0 / 0.35); }
+  .term-bar { display: flex; align-items: center; gap: 10px; padding: 8px 14px; background: oklch(18% 0.014 250); border-bottom: 1px solid var(--rule); font-size: 11px; color: var(--ink-dim); }
+  .term-title { letter-spacing: 0.08em; }
+  .term-meta { margin-left: auto; color: var(--ink-faint); }
+  .term-body { padding: 12px; }
+
+  /* ===== Command Deck primitives ===== */
+  .deck { display: grid; grid-template-rows: auto auto 1fr auto; gap: 10px; }
+
+  .topbar { display: flex; align-items: center; gap: 12px; padding: 7px 10px; border: 1px solid var(--rule); border-radius: 4px; background: oklch(18% 0.014 250); flex-wrap: wrap; }
+  .brand { font-weight: 700; letter-spacing: 0.04em; }
+  .brand .dot { color: var(--accent); }
+  .tabs { display: flex; gap: 2px; }
+  .tab { font-size: 11px; padding: 4px 10px; border-radius: 3px; color: var(--ink-dim); border: 1px solid transparent; }
+  .tab.on { color: var(--ink); background: var(--bg-panel); border-color: var(--rule); }
+  .tab.on::before { content: "▸ "; color: var(--accent); }
+  .tab .ct { color: var(--ink-faint); }
+
+  /* live chips in topbar — these are the new mutable controls */
+  .chips { display: flex; gap: 6px; align-items: center; }
+  .chip {
+    font-size: 11px; padding: 3px 9px; border-radius: 3px; cursor: default;
+    border: 1px solid var(--rule); color: var(--ink-dim); background: var(--bg-elev);
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .chip .lbl { color: var(--ink-faint); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
+  .chip .val { color: var(--ink); }
+  .chip .caret { color: var(--ink-faint); font-size: 9px; }
+  .chip:hover { border-color: var(--accent); } /* presentation only */
+  .chip.lang .val { color: var(--accent); }
+  .chip.eng .val { color: var(--accent-3); }
+  .chip.k { border-style: dashed; }
+
+  .badge { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; padding: 2px 7px; border-radius: 2px; border: 1px solid var(--rule); color: var(--ink-dim); }
+  .badge.ok { color: var(--accent); border-color: oklch(45% 0.10 145); }
+  .badge.warn { color: var(--warn); border-color: oklch(45% 0.10 55); }
+  .badge.bad { color: var(--bad); border-color: oklch(40% 0.12 25); }
+  .badge.live { color: var(--accent); border-color: oklch(45% 0.10 145); }
+  .badge.live::before { content: "● "; }
+
+  .query-bar { display: flex; gap: 10px; align-items: center; padding: 8px 12px; border: 1px solid var(--rule); border-radius: 4px; background: var(--bg-soft); flex-wrap: wrap; }
+  .query-bar .qlbl { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-faint); }
+  .query-bar .q { color: var(--ink); }
+  .query-bar .caret { color: var(--accent); }
+
+  .deck-main { display: grid; grid-template-columns: 1.25fr 1fr; gap: 10px; min-height: 380px; }
+  @media (max-width: 900px) { .deck-main { grid-template-columns: 1fr; } }
+
+  .panel { border: 1px solid var(--rule); border-radius: 4px; padding: 10px 12px; background: var(--bg-soft); }
+  .panel-h { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-faint); margin-bottom: 7px; display: flex; align-items: center; gap: 8px; }
+  .panel-h .right { margin-left: auto; color: var(--ink-faint); letter-spacing: 0.04em; text-transform: none; font-size: 10px; }
+
+  table.subs { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.subs th { text-align: left; font-weight: 500; color: var(--ink-faint); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; padding: 5px 8px; border-bottom: 1px solid var(--rule); }
+  table.subs td { padding: 6px 8px; border-bottom: 1px solid var(--rule-soft); color: var(--ink); }
+  table.subs tr.cur td { background: oklch(24% 0.03 145 / 0.18); }
+  table.subs tr.cur td:first-child { box-shadow: inset 2px 0 var(--accent); }
+  table.subs .idx { color: var(--ink-faint); width: 26px; }
+  table.subs .score { width: 64px; text-align: right; }
+  table.subs .sc-bar { display: inline-block; width: 36px; height: 5px; background: oklch(26% 0.01 250); border-radius: 1px; margin-right: 5px; vertical-align: middle; overflow: hidden; }
+  table.subs .sc-bar > i { display: block; height: 100%; background: var(--accent-2); }
+  table.subs .lang { width: 30px; }
+  table.subs .dl { color: var(--ink-faint); width: 54px; text-align: right; font-variant-numeric: tabular-nums; }
+  table.subs .flags { color: var(--ink-faint); white-space: nowrap; font-size: 11px; }
+  .flag-h { color: var(--accent-3); }
+  .flag-m { color: var(--warn); }
+
+  .detail h3 { font: 600 13px/1.3 var(--mono); margin: 0 0 8px; }
+  .detail .movie { color: var(--accent-2); font-size: 11px; margin-bottom: 10px; }
+  .kv { display: grid; grid-template-columns: 96px 1fr; gap: 5px 10px; font-size: 11.5px; }
+  .kv .k { color: var(--ink-faint); }
+  .kv .v { color: var(--ink); word-break: break-word; }
+  .kv .v.good { color: var(--accent); }
+  .actions { display: flex; gap: 6px; margin-top: 14px; flex-wrap: wrap; }
+  .btn { font-size: 11px; padding: 5px 10px; border-radius: 3px; border: 1px solid var(--rule); color: var(--ink-dim); display: inline-flex; align-items: center; gap: 6px; }
+  .btn.pri { color: oklch(20% 0.02 145); background: var(--accent); border-color: var(--accent); font-weight: 600; }
+  .btn .k { font-size: 10px; color: var(--ink-faint); border: 1px solid var(--rule); padding: 0 4px; border-radius: 2px; }
+  .btn.pri .k { color: oklch(28% 0.05 145); border-color: oklch(28% 0.05 145); }
+
+  .statusbar { display: flex; align-items: center; gap: 14px; padding: 7px 12px; border: 1px solid var(--rule); border-radius: 4px; background: oklch(18% 0.014 250); font-size: 11px; color: var(--ink-dim); flex-wrap: wrap; }
+  .statusbar .sep { color: var(--ink-faint); }
+  .statusbar .hint { color: var(--ink-faint); }
+  .statusbar b { color: var(--ink); }
+
+  /* ===== overlay: command palette ===== */
+  .palette-wrap { display: grid; grid-template-columns: 1fr; gap: 14px; }
+  .palette {
+    background: oklch(15% 0.014 250);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    box-shadow: 0 20px 60px oklch(0% 0 0 / 0.5);
+    overflow: hidden;
+    max-width: 620px; margin: 0 auto;
+  }
+  .palette-input { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--rule); }
+  .palette-input .prmpt { color: var(--accent); font-weight: 700; }
+  .palette-input .q { color: var(--ink); flex: 1; }
+  .palette-input .q .caret { color: var(--accent); }
+  .palette-list { padding: 6px; max-height: 320px; }
+  .pal-item { display: flex; align-items: center; gap: 12px; padding: 8px 10px; border-radius: 4px; font-size: 12.5px; }
+  .pal-item.sel { background: oklch(24% 0.06 145 / 0.22); box-shadow: inset 2px 0 var(--accent); }
+  .pal-item .ic { width: 18px; color: var(--ink-faint); text-align: center; }
+  .pal-item.sel .ic { color: var(--accent); }
+  .pal-item .label { color: var(--ink); }
+  .pal-item .label em { color: var(--accent); font-style: normal; }
+  .pal-item .cat { margin-left: auto; font-size: 10px; color: var(--ink-faint); letter-spacing: 0.1em; text-transform: uppercase; }
+  .pal-item .shortcut { font-size: 10px; color: var(--ink-faint); border: 1px solid var(--rule); padding: 1px 5px; border-radius: 2px; margin-left: 8px; }
+  .pal-foot { display: flex; gap: 14px; padding: 8px 14px; border-top: 1px solid var(--rule); font-size: 10px; color: var(--ink-faint); }
+  .pal-foot b { color: var(--ink-dim); }
+
+  /* ===== overlay: language popover ===== */
+  .popover-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+  @media (max-width: 900px) { .popover-grid { grid-template-columns: 1fr; } }
+  .popover {
+    background: oklch(15% 0.014 250);
+    border: 1px solid var(--accent-3);
+    border-radius: 6px;
+    box-shadow: 0 16px 50px oklch(0% 0 0 / 0.45);
+    overflow: hidden;
+    max-width: 420px;
+  }
+  .pop-head { padding: 9px 12px; border-bottom: 1px solid var(--rule); display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--ink-dim); }
+  .pop-head .ttl { color: var(--ink); letter-spacing: 0.04em; }
+  .pop-head .meta { margin-left: auto; color: var(--ink-faint); }
+  .lang-list { padding: 6px; }
+  .lang-row { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 4px; font-size: 12.5px; }
+  .lang-row.sel { background: oklch(24% 0.06 145 / 0.22); box-shadow: inset 2px 0 var(--accent); }
+  .lang-row .code { color: var(--ink-faint); font-size: 10px; width: 26px; }
+  .lang-row .name { color: var(--ink); }
+  .lang-row .name.ar { font-family: var(--arabic); direction: rtl; text-align: right; }
+  .lang-row .name.zh { font-family: var(--cjk); }
+  .lang-row .chk { margin-left: auto; color: var(--accent); }
+  .lang-row .primary { font-size: 9px; color: var(--ink-faint); border: 1px solid var(--rule); padding: 1px 5px; border-radius: 2px; letter-spacing: 0.1em; }
+  .pop-foot { padding: 8px 12px; border-top: 1px solid var(--rule); font-size: 10px; color: var(--ink-faint); display: flex; gap: 12px; }
+  .pop-foot b { color: var(--ink-dim); }
+
+  /* ===== overlay: engine switcher ===== */
+  .eng-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 4px; font-size: 12.5px; border: 1px solid var(--rule-soft); margin-bottom: 6px; background: var(--bg-soft); }
+  .eng-row.sel { border-color: var(--accent); background: oklch(24% 0.06 145 / 0.16); }
+  .eng-row .nm { color: var(--ink); font-weight: 600; }
+  .eng-row .ds { color: var(--ink-dim); font-size: 11px; }
+  .eng-row .stat { margin-left: auto; }
+  .eng-row .lat { color: var(--ink-faint); font-size: 10px; width: 56px; text-align: right; }
+
+  /* ===== post-download toast ===== */
+  .toast {
+    background: oklch(20% 0.03 145);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    box-shadow: 0 14px 40px oklch(0% 0 0 / 0.45);
+    overflow: hidden;
+    max-width: 560px;
+  }
+  .toast-head { padding: 10px 14px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--rule); }
+  .toast-head .ok-ic { color: var(--accent); font-weight: 700; }
+  .toast-head .file { color: var(--ink); font-size: 12.5px; word-break: break-all; }
+  .toast-head .path { color: var(--ink-faint); font-size: 10px; margin-left: auto; }
+  .toast-body { padding: 12px 14px; }
+  .toast-q { font-size: 11px; color: var(--ink-dim); margin-bottom: 10px; letter-spacing: 0.04em; }
+  .toast-actions { display: flex; gap: 7px; flex-wrap: wrap; }
+  .toast-foot { padding: 8px 14px; border-top: 1px solid var(--rule); font-size: 10px; color: var(--ink-faint); display: flex; gap: 14px; }
+  .toast-foot b { color: var(--ink-dim); }
+
+  /* settings rail */
+  .rail { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  @media (max-width: 700px) { .rail { grid-template-columns: repeat(2, 1fr); } }
+  .toggle { border: 1px solid var(--rule); border-radius: 4px; padding: 8px 10px; font-size: 11px; background: var(--bg-soft); }
+  .toggle .row1 { display: flex; align-items: center; gap: 8px; }
+  .toggle .nm { color: var(--ink-dim); }
+  .toggle .sw { margin-left: auto; width: 26px; height: 14px; border-radius: 8px; background: oklch(26% 0.01 250); position: relative; border: 1px solid var(--rule); }
+  .toggle .sw::after { content: ""; position: absolute; top: 1px; left: 1px; width: 10px; height: 10px; border-radius: 50%; background: var(--ink-faint); }
+  .toggle.on .sw { background: var(--accent); border-color: var(--accent); }
+  .toggle.on .sw::after { left: 13px; background: oklch(20% 0.02 145); }
+  .toggle.ask .sw { background: var(--accent-2); border-color: var(--accent-2); }
+  .toggle .ds { color: var(--ink-faint); font-size: 10px; margin-top: 4px; }
+
+  .callout {
+    border-left: 2px solid var(--accent);
+    padding: 10px 14px;
+    background: oklch(15% 0.014 250);
+    border-radius: 0 4px 4px 0;
+    font-size: 12px;
+    color: var(--ink-dim);
+    line-height: 1.65;
+    margin-top: 14px;
+  }
+  .callout b { color: var(--ink); }
+  .callout code { color: var(--accent-2); background: oklch(20% 0.02 250); padding: 0 4px; border-radius: 2px; font-size: 11px; }
+
+  .arrow-note { text-align: center; color: var(--ink-faint); font-size: 11px; margin: 6px 0; letter-spacing: 0.1em; }
+</style>
+</head>
+<body>
+<div class="frame">
+
+  <header class="intro">
+    <div class="kicker">Command Deck · refinement · live controls</div>
+    <h1>Command Deck, but mutable while it runs</h1>
+    <p class="lede">
+      You picked <b>A · Command Deck</b>. The ask: don't make me quit to change language, switch engine, or run clean/sync. So the chrome itself becomes the control surface —
+      <span class="pill">click lang chip</span> to re-language the rest of the run,
+      <span class="pill">click engine chip</span> to swap OpenSubtitles↔SubDL↔SubSource mid-batch,
+      <span class="pill">⌘K</span> to do anything by name.
+      Below: the main screen, then four states zoomed in.
+    </p>
+  </header>
+
+  <!-- ============ 1 · MAIN SCREEN ============ -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">01</span>
+      <span class="sec-title">The main screen — chrome is the control surface</span>
+      <span class="sec-sub">click any underlined chip → overlay opens</span>
+    </div>
+
+    <div class="term">
+      <div class="term-bar">
+        <span class="term-title">subs — command deck</span>
+        <span class="term-meta">⌘K do anything · / filter · jk scroll · ↵ open · ? help</span>
+      </div>
+      <div class="term-body">
+        <div class="deck">
+
+          <!-- top bar: tabs + LIVE chips (the new mutable controls) -->
+          <div class="topbar">
+            <span class="brand">▸ subs<span class="dot">.</span></span>
+            <div class="tabs">
+              <span class="tab on">Search</span>
+              <span class="tab">Queue <span class="ct">3</span></span>
+              <span class="tab">History</span>
+              <span class="tab">Config</span>
+            </div>
+            <div style="flex:1"></div>
+
+            <div class="chips">
+              <span class="chip eng" title="click to switch engine — §03">
+                <span class="lbl">engine</span><span class="val">OpenSubtitles</span><span class="caret">▾</span>
+              </span>
+              <span class="chip lang" title="click to change language — §02">
+                <span class="lbl">lang</span><span class="val">EN</span><span class="caret">▾</span>
+              </span>
+              <span class="chip" title="⌘K palette — §04">
+                <span class="lbl">⌘K</span><span class="val">command</span>
+              </span>
+              <span class="badge ok">OS · 41ms</span>
+            </div>
+          </div>
+
+          <!-- query -->
+          <div class="query-bar">
+            <span class="qlbl">query</span>
+            <span class="q">Inception.2010.1080p.BluRay<span class="caret">▍</span></span>
+            <div style="flex:1"></div>
+            <span class="badge">4 results · 0.42s</span>
+            <span class="badge live">hash match found</span>
+          </div>
+
+          <!-- main split -->
+          <div class="deck-main">
+            <div class="panel" style="padding:0; overflow:hidden">
+              <div class="panel-h" style="padding:10px 12px 0;">
+                <span>results</span>
+                <span style="color:var(--ink-faint)">· sorted by match</span>
+                <span class="right">/ to filter · s to re-sort</span>
+              </div>
+              <table class="subs">
+                <thead><tr>
+                  <th>#</th><th>Release</th><th class="lang">L</th><th>Flags</th><th class="dl">D/L</th><th class="score">Match</th>
+                </tr></thead>
+                <tbody>
+                  <tr class="cur">
+                    <td class="idx">1</td>
+                    <td>Inception.2010.1080p.BluRay.x264-SPARKS</td>
+                    <td class="lang">en</td>
+                    <td class="flags"><span class="flag-h">⤓hash</span> 1080p BD</td>
+                    <td class="dl">48k</td>
+                    <td class="score"><span class="sc-bar"><i style="width:96%"></i></span>96</td>
+                  </tr>
+                  <tr>
+                    <td class="idx">2</td><td>Inception.2010.BluRay.Remux.1080p.AVC</td>
+                    <td class="lang">en</td>
+                    <td class="flags">1080p</td><td class="dl">22k</td>
+                    <td class="score"><span class="sc-bar"><i style="width:81%"></i></span>81</td>
+                  </tr>
+                  <tr>
+                    <td class="idx">3</td><td>Inception.2010.1080p.BluRay.HUN</td>
+                    <td class="lang">en</td>
+                    <td class="flags"><span class="flag-m">⚙AI</span></td><td class="dl">9k</td>
+                    <td class="score"><span class="sc-bar"><i style="width:64%"></i></span>64</td>
+                  </tr>
+                  <tr>
+                    <td class="idx">4</td><td>Inception.2010.1080p.BluRay.yts.mx</td>
+                    <td class="lang">en</td>
+                    <td class="flags">1080p</td><td class="dl">6k</td>
+                    <td class="score"><span class="sc-bar"><i style="width:58%"></i></span>58</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="panel detail">
+              <div class="panel-h"><span>preview · row 1</span><span class="right">p to open full</span></div>
+              <h3>Inception.2010.1080p.BluRay.x264-SPARKS</h3>
+              <div class="movie">Inception (2010) · Christopher Nolan</div>
+              <div class="kv">
+                <div class="k">Language</div><div class="v">English (en)</div>
+                <div class="k">Uploader</div><div class="v">sparks · 48,213 downloads</div>
+                <div class="k">Source</div><div class="v">BluRay · 1080p</div>
+                <div class="k">Hash match</div><div class="v good">✔ yes — exact file</div>
+                <div class="k">Machine tr.</div><div class="v">no</div>
+              </div>
+              <div class="actions">
+                <span class="btn pri">Download <span class="k">↵</span></span>
+                <span class="btn">Preview <span class="k">p</span></span>
+                <span class="btn">Copy URL <span class="k">y</span></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- status bar mirrors current run settings as live toggles -->
+          <div class="statusbar">
+            <span class="badge live">idle · 1/4 done</span>
+            <span>engine <b>OpenSubtitles</b></span><span class="sep">│</span>
+            <span>lang <b>EN</b></span><span class="sep">│</span>
+            <span>utf-8 <b>✓</b></span><span class="sep">│</span>
+            <span>clean <b>✓</b></span><span class="sep">│</span>
+            <span>sync <b>ask</b></span><span class="sep">│</span>
+            <span>HI <b>off</b></span>
+            <div style="flex:1"></div>
+            <span class="hint">L lang · B engine · K palette · q quit</span>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <div class="callout">
+      <b>What changed vs. mockup v1:</b> the topbar's <code>engine</code> and <code>lang</code> chips are now <i>clickable live controls</i>, not just labels. The status bar at the bottom mirrors every current setting as a one-key toggle (<code>L</code> language, <code>B</code> backend, etc.) — so you can flip anything without leaving the keyboard. The four states below are what opens when you trigger them.
+    </div>
+  </section>
+
+  <!-- ============ 2 · LANGUAGE POPOVER ============ -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">02</span>
+      <span class="sec-title">Change language mid-run — press L or click the lang chip</span>
+      <span class="sec-sub">applies to current + remaining files, with a confirm if a batch is in flight</span>
+    </div>
+
+    <div class="popover-grid">
+      <div>
+        <div class="popover">
+          <div class="pop-head">
+            <span style="color:var(--accent-3)">▾</span>
+            <span class="ttl">Language</span>
+            <span class="meta">/ to filter · ↑↓ · ↵ · esc to cancel</span>
+          </div>
+          <div class="lang-list">
+            <div class="lang-row sel">
+              <span class="code">en</span><span class="name">English</span><span class="primary">PRIMARY</span><span class="chk">●</span>
+            </div>
+            <div class="lang-row">
+              <span class="code">ar</span><span class="name ar">العربية</span><span class="chk"></span>
+            </div>
+            <div class="lang-row">
+              <span class="code">zh</span><span class="name zh">中文</span><span class="chk"></span>
+            </div>
+            <div class="lang-row">
+              <span class="code">fr</span><span class="name">Français</span><span class="chk"></span>
+            </div>
+            <div class="lang-row">
+              <span class="code">ja</span><span class="name">日本語</span><span class="chk"></span>
+            </div>
+            <div class="lang-row">
+              <span class="code">es</span><span class="name">Español</span><span class="chk"></span>
+            </div>
+            <div class="lang-row" style="border-top:1px solid var(--rule-soft); margin-top:4px; padding-top:9px">
+              <span class="code">+</span><span class="name" style="color:var(--ink-dim)">Add language by code…</span>
+            </div>
+          </div>
+          <div class="pop-foot">
+            <span><b>↹</b> multi-select</span>
+            <span><b>a</b> apply to all queued</span>
+            <span><b>c</b> current file only</span>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="panel" style="margin-bottom:14px">
+          <div class="panel-h"><span>apply scope</span></div>
+          <div class="kv" style="font-size:12px">
+            <div class="k">3 queued files</div>
+            <div class="v">Dune.Part.Two… · الهيبة.mp4 · 流浪地球2.mkv</div>
+            <div class="k">Choice</div>
+            <div class="v">Apply <b style="color:var(--accent)">العربية</b> to:
+              <div class="actions" style="margin-top:8px">
+                <span class="btn pri">remaining 3 files <span class="k">a</span></span>
+                <span class="btn">this file only <span class="k">c</span></span>
+                <span class="btn">cancel <span class="k">esc</span></span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="callout" style="margin-top:0">
+          <b>Why the confirm:</b> switching language mid-batch silently changes what the remaining files fetch — that's the kind of "silent wrong-episode" bug your <code>8bab15e</code> commit just fixed. So when a run is in flight, the scope picker is mandatory; for a single file it just applies instantly. Native names render in their own script so you pick <code>العربية</code> not "Arabic".
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 3 · ENGINE SWITCHER ============ -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">03</span>
+      <span class="sec-title">Switch engine mid-run — press B or click the engine chip</span>
+      <span class="sec-sub">live health + latency, mirroring your AUTO probe logic</span>
+    </div>
+
+    <div class="popover-grid">
+      <div>
+        <div class="popover" style="border-color:var(--accent-3)">
+          <div class="pop-head">
+            <span style="color:var(--accent-3)">⇄</span>
+            <span class="ttl">Subtitle engine</span>
+            <span class="meta">↑↓ · ↵ · esc</span>
+          </div>
+          <div style="padding:8px">
+            <div class="eng-row sel">
+              <span class="nm">OpenSubtitles</span>
+              <span class="ds">largest catalogue · hash match support</span>
+              <span class="stat"><span class="badge ok">online</span></span>
+              <span class="lat">41ms</span>
+            </div>
+            <div class="eng-row">
+              <span class="nm">SubDL</span>
+              <span class="ds">strong for Arabic / Asian content</span>
+              <span class="stat"><span class="badge ok">online</span></span>
+              <span class="lat">112ms</span>
+            </div>
+            <div class="eng-row">
+              <span class="nm">SubSource</span>
+              <span class="ds">community · per-season TV</span>
+              <span class="stat"><span class="badge warn">degraded</span></span>
+              <span class="lat">—</span>
+            </div>
+            <div class="eng-row" style="border-style:dashed">
+              <span class="nm" style="color:var(--ink-dim)">Auto</span>
+              <span class="ds">pick fastest available at run start</span>
+              <span class="stat"></span>
+              <span class="lat"></span>
+            </div>
+          </div>
+          <div class="pop-foot">
+            <span><b>r</b> re-probe now</span>
+            <span><b>m</b> merge results from all 3</span>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="panel">
+          <div class="panel-h"><span>merge mode (optional power feature)</span><span class="right">m to toggle</span></div>
+          <div style="font-size:12px; color:var(--ink-dim); line-height:1.7">
+            Hit <code style="color:var(--accent-2)">m</code> and the next query fans out to all three engines in parallel, then dedupes by id and re-scores against your filename — same <code>score_subtitle</code> logic, bigger pool. The results table gets a new <b>Source</b> column so you can see which engine each row came from. Off by default; some users prefer one engine's naming conventions.
+          </div>
+          <div class="actions" style="margin-top:12px">
+            <span class="btn pri">Merge from all 3 <span class="k">m</span></span>
+            <span class="btn">Just OpenSubtitles <span class="k">↵</span></span>
+          </div>
+        </div>
+        <div class="callout">
+          <b>Health check</b> reuses your existing <code>_check_api_availability</code> probes (the v2 <code>/me</code> endpoint for SubDL, etc.) — just cached and shown as a badge + latency. The <code>degraded</code> state on SubSource maps to your current "all APIs unavailable" branch.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 4 · POST-DOWNLOAD TOAST ============ -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">04</span>
+      <span class="sec-title">After a download finishes — clean / sync / both / done, inline</span>
+      <span class="sec-sub">non-blocking; slides in, times out, never steals focus from the next file</span>
+    </div>
+
+    <div class="popover-grid">
+      <div>
+        <div class="toast">
+          <div class="toast-head">
+            <span class="ok-ic">✓</span>
+            <span class="file">Inception.2010.1080p.BluRay.x264-SPARKS.srt</span>
+            <span class="path">→ /media/movies/</span>
+          </div>
+          <div class="toast-body">
+            <div class="toast-q">Downloaded in 0.8s · 48 KB. What next?</div>
+            <div class="toast-actions">
+              <span class="btn pri">Clean + Sync <span class="k">↵</span></span>
+              <span class="btn">Clean only <span class="k">c</span></span>
+              <span class="btn">Sync only <span class="k">s</span></span>
+              <span class="btn">Done <span class="k">d</span></span>
+            </div>
+          </div>
+          <div class="toast-foot">
+            <span>auto-picks in <b>5s</b> from your default: <b>Clean + Sync</b></span>
+            <span style="margin-left:auto"><b>esc</b> skip · <b>A</b> always use this</span>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="panel" style="margin-bottom:14px">
+          <div class="panel-h"><span>post-download policy</span><span class="right">set in Config or here</span></div>
+          <div class="kv" style="font-size:12px">
+            <div class="k">Clean ads</div><div class="v">runs <code>clean_subtitles.clean_ads</code> against your ads.txt</div>
+            <div class="k">Audio sync</div><div class="v">runs <code>ffsubsync</code> via your existing <code>sync_subtitles</code></div>
+            <div class="k">Force UTF-8</div><div class="v">always on if set — silent, never asked</div>
+            <div class="k">Default</div><div class="v" style="color:var(--accent)">Clean + Sync (from config: <code>sync_audio_to_subs: ask</code>)</div>
+          </div>
+        </div>
+        <div class="callout" style="margin-top:0">
+          <b>The 5-second auto-pick</b> is the key QoL win: in a bulk run you don't get blocked waiting to press a key — it just proceeds with your default, and the toast records what it did in History. Press <code>A</code> to pin the current choice as the new default (writes back to config). If sync fails (no ffmpeg), the toast turns amber and offers retry-without-sync.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 5 · COMMAND PALETTE ============ -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">05</span>
+      <span class="sec-title">⌘K — the "do anything by name" surface</span>
+      <span class="sec-sub">fuzzy-search every action; the escape hatch when you forget the key</span>
+    </div>
+
+    <div class="palette-wrap">
+      <div class="palette">
+        <div class="palette-input">
+          <span class="prmpt">›</span>
+          <span class="q">sync<span class="caret">▍</span></span>
+          <span style="color:var(--ink-faint); font-size:10px">5 matches</span>
+        </div>
+        <div class="palette-list">
+          <div class="pal-item sel">
+            <span class="ic">↻</span>
+            <span class="label">Run <em>sync</em> on last downloaded subtitle</span>
+            <span class="cat">action</span>
+            <span class="shortcut">s</span>
+          </div>
+          <div class="pal-item">
+            <span class="ic">⚙</span>
+            <span class="label">Set audio-<em>sync</em> policy: always / never / ask</span>
+            <span class="cat">setting</span>
+          </div>
+          <div class="pal-item">
+            <span class="ic">↻</span>
+            <span class="label"><em>Sync</em> all in History missing a sync pass</span>
+            <span class="cat">batch</span>
+          </div>
+          <div class="pal-item">
+            <span class="ic">⟳</span>
+            <span class="label">Re-probe engines (health + latency)</span>
+            <span class="cat">engine</span>
+            <span class="shortcut">r</span>
+          </div>
+          <div class="pal-item">
+            <span class="ic">🌐</span>
+            <span class="label">Change language…</span>
+            <span class="cat">setting</span>
+            <span class="shortcut">L</span>
+          </div>
+        </div>
+        <div class="pal-foot">
+          <span><b>↑↓</b> navigate</span>
+          <span><b>↵</b> run</span>
+          <span><b>⌘↵</b> run + keep open</span>
+          <span><b>esc</b> close</span>
+          <span style="margin-left:auto">indexed: 42 actions</span>
+        </div>
+      </div>
+
+      <div class="callout">
+        <b>Why this matters for "QoL stuff":</b> every feature above (and the dozen config knobs you already have — UTF-8, hearing-impaired filter, auto-select, ads-file path) is also reachable here by typing part of its name. So the app stays discoverable even as features grow — no "I know there's a setting but I can't find it." It's the pattern every mature TUI from <code>lazygit</code> to <code>helix</code> converged on for exactly this reason.
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 6 · SETTINGS RAIL ============ -->
+  <section>
+    <div class="sec-head">
+      <span class="sec-num">06</span>
+      <span class="sec-title">All your existing config choices — live, flippable, no YAML edit needed</span>
+      <span class="sec-sub">the Config tab; same keys as YAML, persists back to config.yaml</span>
+    </div>
+
+    <div class="term">
+      <div class="term-bar">
+        <span class="term-title">subs — config</span>
+        <span class="term-meta">⌘S to save back to config.yaml · esc to return</span>
+      </div>
+      <div class="term-body">
+        <div class="panel-h" style="margin-bottom:10px"><span>post-download</span></div>
+        <div class="rail" style="margin-bottom:16px">
+          <div class="toggle on"><div class="row1"><span class="nm">Force UTF-8</span><span class="sw"></span></div><div class="ds">opt_force_utf8</div></div>
+          <div class="toggle on"><div class="row1"><span class="nm">Clean ads</span><span class="sw"></span></div><div class="ds">cleaning_subtitles.ads</div></div>
+          <div class="toggle ask"><div class="row1"><span class="nm">Audio sync</span><span class="sw"></span></div><div class="ds">sync_audio_to_subs · ask</div></div>
+          <div class="toggle"><div class="row1"><span class="nm">Hearing impaired</span><span class="sw"></span></div><div class="ds">hi filter · exclude</div></div>
+        </div>
+
+        <div class="panel-h" style="margin-bottom:10px"><span>search behaviour</span></div>
+        <div class="rail" style="margin-bottom:16px">
+          <div class="toggle"><div class="row1"><span class="nm">Auto-select best</span><span class="sw"></span></div><div class="ds">auto_selection · off</div></div>
+          <div class="toggle on"><div class="row1"><span class="nm">Hash match first</span><span class="sw"></span></div><div class="ds">probe moviehash</div></div>
+          <div class="toggle on"><div class="row1"><span class="nm">Alt-name search</span><span class="sw"></span></div><div class="ds">get_alternate_names</div></div>
+          <div class="toggle"><div class="row1"><span class="nm">AI-translated</span><span class="sw"></span></div><div class="ds">show ⚙AI rows</div></div>
+        </div>
+
+        <div class="panel-h" style="margin-bottom:10px"><span>ads file</span></div>
+        <div class="panel" style="padding:10px 12px; font-size:12px">
+          <span style="color:var(--ink-faint)">file_path</span>
+          <span style="color:var(--ink); margin-left:8px">D:\PycharmProjects\clean_subtitles\ads.txt</span>
+          <span class="btn" style="margin-left:10px">Browse…</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout">
+      <b>Persists to your real config.yaml</b> — these map 1:1 to the keys already in there (<code>opt_force_utf8</code>, <code>sync_audio_to_subs</code>, <code>auto_selection</code>, etc.). Nothing new to learn; the TUI is just a friendlier editor. <code>⌘S</code> writes, with a one-line diff preview before commit. Hand-editors keep working untouched.
+    </div>
+  </section>
+
+  <section>
+    <div class="callout" style="border-left-color: var(--accent-2)">
+      <b>That's the full interaction surface.</b> Open <code>02-command-deck-live.html</code> in your browser and scroll through states 01–06. When something's off — wording, a missing choice, a state you'd want shown differently — tell me which § and I'll re-render just that piece. Once this feels right I'll write the spec and we move to the implementation plan.
+    </div>
+  </section>
+
+</div>
+</body>
+</html>

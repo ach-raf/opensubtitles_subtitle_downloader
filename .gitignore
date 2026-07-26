@@ -186,3 +186,8 @@ cython_debug/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+# Ignore docs/ by default, but track design specs and TUI mockups.
+docs/*
+!docs/superpowers/
+!docs/tui-redesign/
+.superpowers/

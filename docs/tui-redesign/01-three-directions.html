@@ -1,0 +1,688 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>TUI Redesign · Three Directions</title>
+<!--
+  Hallmark · macrostructure: side-by-side comparison canvas
+  · theme: Terminal (atmospheric cluster, paper-band dark)
+  · tone: technical · multilingual subtitle downloader
+  · axis: dark / mono / phosphor-green + amber accent
+  This is a TEXTUAL mockup: every glyph here maps 1:1 to a real TUI widget.
+  No browser-only tricks. Monospace + box-drawing only.
+-->
+<style>
+  :root {
+    --bg:        oklch(16% 0.012 250);   /* deep ink, slight cool */
+    --bg-soft:   oklch(20% 0.014 250);
+    --bg-panel:  oklch(13% 0.014 250);
+    --rule:      oklch(32% 0.02 250);
+    --ink:       oklch(90% 0.01 250);
+    --ink-dim:   oklch(62% 0.012 250);
+    --ink-faint: oklch(44% 0.01 250);
+    --accent:    oklch(80% 0.16 145);     /* phosphor green */
+    --accent-2:  oklch(82% 0.13 75);      /* amber */
+    --accent-3:  oklch(72% 0.17 250);     /* signal blue */
+    --warn:      oklch(78% 0.16 55);
+    --bad:       oklch(70% 0.19 25);
+    --good:      var(--accent);
+
+    --mono: "JetBrains Mono","Cascadia Code","SF Mono","Consolas","Noto Sans Mono",ui-monospace,monospace;
+    --arabic: "Noto Naskh Arabic","Scheherazade New","Segoe UI",serif;
+    --cjk: "Noto Sans SC","Microsoft YaHei","PingFang SC",sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: oklch(10% 0.01 250);
+    color: var(--ink);
+    font-family: var(--mono);
+    -webkit-font-smoothing: antialiased;
+  }
+  body { padding: 28px 0 64px; }
+  .frame {
+    width: min(1440px, 96vw);
+    margin: 0 auto;
+  }
+  /* ---- page header (hallmark: honest, no fake browser chrome) ---- */
+  header.intro {
+    padding: 0 0 24px;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 24px;
+  }
+  .kicker {
+    font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  h1 {
+    font: 700 22px/1.2 var(--mono);
+    margin: 10px 0 6px; color: var(--ink);
+  }
+  .lede { font-size: 13px; color: var(--ink-dim); max-width: 78ch; line-height: 1.6; }
+
+  /* ---- direction row: STACKED, full width each ---- */
+  .row {
+    display: flex;
+    flex-direction: column;
+    gap: 40px;
+    margin-bottom: 36px;
+  }
+  .direction {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    gap: 28px;
+    align-items: start;
+  }
+  @media (max-width: 1000px) { .direction { grid-template-columns: 1fr; } }
+  .d-head { padding: 4px 0 0; position: sticky; top: 16px; }
+  .d-num {
+    display: inline-block;
+    font-size: 10px; letter-spacing: 0.2em; color: var(--ink-faint);
+    border: 1px solid var(--rule); padding: 2px 8px; border-radius: 2px;
+  }
+  .d-name { font: 700 16px/1.25 var(--mono); margin: 8px 0 4px; }
+  .d-tag {
+    font-size: 11px; color: var(--accent); letter-spacing: 0.04em;
+  }
+  .d-desc { font-size: 12px; color: var(--ink-dim); line-height: 1.6; margin-top: 8px; }
+
+  /* ---- the fake terminal window (hallmark: real chrome is the user's terminal;
+         here we render the TUI CONTENT inside a thin labelled bezel so you can tell
+         the three apart. This is presentation chrome for the canvas, not shipped.) ---- */
+  .term {
+    background: var(--bg-panel);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    overflow: hidden;
+    font-size: 13px;
+    line-height: 1.55;
+    box-shadow: 0 1px 0 oklch(0% 0 0 / 0.4), 0 18px 40px oklch(0% 0 0 / 0.35);
+  }
+  .term-bar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px;
+    background: oklch(18% 0.014 250);
+    border-bottom: 1px solid var(--rule);
+    font-size: 11px; color: var(--ink-dim);
+  }
+  .term-title { letter-spacing: 0.08em; }
+  .term-meta { margin-left: auto; color: var(--ink-faint); }
+  .term-body { padding: 12px; min-height: 560px; }
+
+  /* ===== shared TUI primitives (used by all three directions) ===== */
+  .t-row { display: flex; gap: 8px; align-items: center; }
+  .t-spacer { flex: 1; }
+
+  .brand {
+    font-weight: 700; letter-spacing: 0.04em; color: var(--ink);
+  }
+  .brand .dot { color: var(--accent); }
+
+  .badge {
+    font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+    padding: 2px 7px; border-radius: 2px;
+    border: 1px solid var(--rule); color: var(--ink-dim);
+  }
+  .badge.ok { color: var(--good); border-color: oklch(45% 0.10 145); }
+  .badge.warn { color: var(--warn); border-color: oklch(45% 0.10 55); }
+  .badge.bad { color: var(--bad); border-color: oklch(40% 0.12 25); }
+  .badge.live { color: var(--accent); border-color: oklch(45% 0.10 145); }
+  .badge.live::before { content: "● "; }
+
+  .panel { border: 1px solid var(--rule); border-radius: 4px; padding: 8px 10px; background: var(--bg-soft); }
+  .panel-h {
+    font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--ink-faint); margin-bottom: 6px;
+  }
+
+  .lang-chip {
+    font-size: 10px; padding: 1px 6px; border: 1px solid var(--rule); border-radius: 2px; color: var(--ink-dim);
+  }
+  .lang-chip.on { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+  .lang-chip.ar { font-family: var(--arabic); }
+  .lang-chip.zh { font-family: var(--cjk); }
+
+  .bar {
+    height: 6px; background: oklch(24% 0.012 250); border-radius: 2px; overflow: hidden;
+  }
+  .bar > i { display: block; height: 100%; background: var(--accent); }
+
+  /* ===== direction 1: COMMAND DECK (master-detail, keyboard-first) ===== */
+  .deck { display: grid; grid-template-rows: auto auto 1fr auto; gap: 10px; }
+  .topbar {
+    display: flex; align-items: center; gap: 14px;
+    padding: 6px 10px;
+    border: 1px solid var(--rule); border-radius: 4px;
+    background: oklch(18% 0.014 250);
+  }
+  .tabs { display: flex; gap: 2px; }
+  .tab {
+    font-size: 11px; padding: 4px 10px; border-radius: 3px; color: var(--ink-dim);
+    border: 1px solid transparent;
+  }
+  .tab.on { color: var(--ink); background: var(--bg-panel); border-color: var(--rule); }
+  .tab.on::before { content: "▸ "; color: var(--accent); }
+
+  .deck-main { display: grid; grid-template-columns: 1.15fr 1fr; gap: 10px; min-height: 360px; }
+
+  table.subs { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+  table.subs th {
+    text-align: left; font-weight: 500; color: var(--ink-faint);
+    font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+    padding: 4px 8px; border-bottom: 1px solid var(--rule);
+    position: sticky; top: 0;
+  }
+  table.subs td { padding: 5px 8px; border-bottom: 1px solid oklch(24% 0.012 250); color: var(--ink); }
+  table.subs tr.cur td { background: oklch(24% 0.03 145 / 0.18); color: var(--ink); }
+  table.subs tr.cur td:first-child { box-shadow: inset 2px 0 var(--accent); }
+  table.subs .idx { color: var(--ink-faint); width: 26px; }
+  table.subs .score { width: 56px; text-align: right; }
+  table.subs .sc-bar { display: inline-block; width: 34px; height: 5px; background: oklch(26% 0.01 250); border-radius: 1px; margin-right: 5px; vertical-align: middle; overflow: hidden; }
+  table.subs .sc-bar > i { display: block; height: 100%; background: var(--accent-2); }
+  table.subs .lang { width: 28px; }
+  table.subs .dl { color: var(--ink-faint); width: 50px; text-align: right; font-variant-numeric: tabular-nums; }
+  table.subs .flags { color: var(--ink-faint); white-space: nowrap; }
+  .flag-h { color: var(--accent-3); }
+  .flag-m { color: var(--warn); }
+  .flag-a { color: var(--ink-faint); }
+
+  .detail h3 { font: 600 13px/1.3 var(--mono); margin: 0 0 8px; color: var(--ink); }
+  .detail .movie { color: var(--accent-2); font-size: 11px; margin-bottom: 8px; }
+  .kv { display: grid; grid-template-columns: 92px 1fr; gap: 4px 10px; font-size: 11px; }
+  .kv .k { color: var(--ink-faint); letter-spacing: 0.04em; }
+  .kv .v { color: var(--ink); word-break: break-word; }
+  .actions { display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap; }
+  .btn {
+    font-size: 11px; padding: 5px 10px; border-radius: 3px;
+    border: 1px solid var(--rule); color: var(--ink-dim);
+  }
+  .btn.pri { color: var(--bg); background: var(--accent); border-color: var(--accent); font-weight: 600; }
+  .btn.key { border-color: var(--rule); }
+  .btn .k {
+    font-size: 10px; color: var(--ink-faint); margin-left: 6px;
+    border: 1px solid var(--rule); padding: 0 4px; border-radius: 2px;
+  }
+  .btn.pri .k { color: oklch(28% 0.05 145); border-color: oklch(28% 0.05 145); }
+
+  .statusbar {
+    display: flex; align-items: center; gap: 14px;
+    padding: 6px 12px; border: 1px solid var(--rule); border-radius: 4px;
+    background: oklch(18% 0.014 250); font-size: 11px; color: var(--ink-dim);
+  }
+  .statusbar .sep { color: var(--ink-faint); }
+
+  /* ===== direction 2: PIPELINE (vertical workflow, 3-pane) ===== */
+  .pipe { display: grid; grid-template-rows: auto 1fr auto; gap: 10px; }
+  .pipe-head {
+    display: flex; align-items: baseline; gap: 14px; padding: 8px 4px 12px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .pipe-head h2 { font: 700 14px/1.2 var(--mono); margin: 0; }
+  .pipe-stages { display: flex; gap: 6px; margin-left: auto; font-size: 10px; color: var(--ink-faint); letter-spacing: 0.1em; }
+  .stage { padding: 3px 8px; border: 1px solid var(--rule); border-radius: 2px; }
+  .stage.done { color: var(--accent); border-color: oklch(40% 0.08 145); }
+  .stage.cur { color: var(--ink); border-color: var(--accent); background: oklch(24% 0.06 145 / 0.25); }
+
+  .pipe-body { display: grid; grid-template-columns: 1fr 1.3fr 0.9fr; gap: 10px; min-height: 380px; }
+  .file-list { font-size: 11px; }
+  .file { padding: 7px 8px; border: 1px solid oklch(24% 0.012 250); border-radius: 3px; margin-bottom: 6px; }
+  .file .name { color: var(--ink); word-break: break-word; }
+  .file .name.ar { font-family: var(--arabic); direction: rtl; text-align: right; }
+  .file .name.zh { font-family: var(--cjk); }
+  .file .meta { color: var(--ink-faint); font-size: 10px; margin-top: 3px; }
+  .file.active { border-color: var(--accent); background: oklch(24% 0.06 145 / 0.18); }
+  .file.done { border-color: oklch(40% 0.06 145); }
+  .file .check { color: var(--accent); margin-right: 5px; }
+  .file .pend { color: var(--ink-faint); margin-right: 5px; }
+
+  /* ===== direction 3: FOCUS (single-task, big & calm) ===== */
+  .focus { display: grid; grid-template-rows: auto auto 1fr auto; gap: 12px; }
+  .focus-hero {
+    text-align: left; padding: 6px 4px 14px; border-bottom: 1px solid var(--rule);
+  }
+  .focus-hero .now { font-size: 11px; color: var(--ink-faint); letter-spacing: 0.16em; text-transform: uppercase; }
+  .focus-hero h2 {
+    font: 700 18px/1.25 var(--mono); margin: 8px 0 4px; color: var(--ink);
+  }
+  .focus-hero .sub { color: var(--ink-dim); font-size: 12px; }
+  .focus-hero .sub .ar { font-family: var(--arabic); direction: rtl; unicode-bidi: isolate; }
+
+  .pick-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+  }
+  .pick {
+    border: 1px solid var(--rule); border-radius: 4px; padding: 8px 10px;
+    font-size: 11.5px;
+  }
+  .pick.top { border-color: var(--accent); background: oklch(24% 0.06 145 / 0.16); }
+  .pick .row1 { display: flex; gap: 8px; align-items: center; }
+  .pick .sc { font-variant-numeric: tabular-nums; color: var(--accent-2); font-weight: 600; }
+  .pick .lang { color: var(--ink-dim); }
+  .pick .rel { color: var(--ink); margin-top: 4px; word-break: break-word; }
+  .pick .foot { color: var(--ink-faint); font-size: 10px; margin-top: 4px; }
+
+  /* ---- comparison strip ---- */
+  .compare {
+    border-top: 1px solid var(--rule); margin-top: 12px; padding-top: 22px;
+  }
+  .compare h3 { font: 600 14px var(--mono); margin: 0 0 14px; }
+  table.cmp { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.cmp th, table.cmp td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  table.cmp th { color: var(--ink-faint); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 500; }
+  table.cmp td:first-child { color: var(--ink-dim); width: 22%; }
+  table.cmp .win { color: var(--accent); }
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 16px; margin-top: 16px;
+    font-size: 11px; color: var(--ink-dim);
+  }
+  .legend span b { color: var(--ink); }
+
+  .note {
+    margin-top: 22px; padding: 12px 14px; border: 1px dashed var(--rule); border-radius: 4px;
+    font-size: 11.5px; color: var(--ink-dim); line-height: 1.6;
+  }
+  .note b { color: var(--ink); }
+</style>
+</head>
+<body>
+<div class="frame">
+
+  <header class="intro">
+    <div class="kicker">TUI Redesign · subtitle downloader · three directions</div>
+    <h1>同一个任务，三种结构</h1>
+    <p class="lede">
+      Same scenario in all three: searching <b>Inception.2010.1080p.BluRay.mkv</b> on OpenSubtitles, 4 results back, picking the top-scored one.
+      Each panel below is a faithful Textual render — every glyph maps to a real widget.
+      Goal: pick a layout language, or mix axes (e.g. <i>Command Deck</i> navigation + <i>Pipeline</i> file list).
+      Arabic & Chinese samples are real UTF-8, so you can judge multilingual handling directly.
+    </p>
+  </header>
+
+  <div class="row">
+
+    <!-- ===================== DIRECTION 1 · COMMAND DECK ===================== -->
+    <div class="direction">
+      <div class="d-head">
+        <span class="d-num">A · MASTER-DETAIL</span>
+        <div class="d-name">Command Deck</div>
+        <div class="d-tag">keyboard-first · dense · power-user</div>
+        <div class="d-desc">
+          Inspired by <b>htop</b> + <b>lazygit</b>. One screen, sidebar-free. Tabbed top nav, a sortable results table with a live preview pane, and a Vim-style command bar. Highest information density; built for someone who downloads a lot and wants zero mouse.
+        </div>
+      </div>
+
+      <div class="term">
+        <div class="term-bar">
+          <span class="term-title">subs — OpenSubtitles</span>
+          <span class="term-meta">⌘K palette · / filter · jk scroll · enter open</span>
+        </div>
+        <div class="term-body">
+          <div class="deck">
+
+            <div class="topbar">
+              <span class="brand">▸ subs<span class="dot">.</span></span>
+              <div class="tabs">
+                <span class="tab on">Search</span>
+                <span class="tab">Queue <span style="color:var(--ink-faint)">3</span></span>
+                <span class="tab">History</span>
+                <span class="tab">Config</span>
+              </div>
+              <div class="t-spacer"></div>
+              <span class="badge ok">OS · online</span>
+              <span class="badge">v2.0</span>
+            </div>
+
+            <div class="panel" style="display:flex; gap:10px; align-items:center;">
+              <span class="kicker" style="margin:0">query</span>
+              <span style="color:var(--ink)">Inception.2010.1080p.BluRay</span>
+              <span style="color:var(--accent)">▍</span>
+              <div class="t-spacer"></div>
+              <span class="lang-chip on">EN</span>
+              <span class="lang-chip ar">عربي</span>
+              <span class="lang-chip zh">中文</span>
+              <span class="lang-chip">FR</span>
+              <span class="badge">4 results · 0.42s</span>
+            </div>
+
+            <div class="deck-main">
+              <div class="panel" style="padding:0; overflow:hidden">
+                <table class="subs">
+                  <thead><tr>
+                    <th>#</th><th>Release</th><th class="lang">L</th><th>Flags</th><th class="dl">D/L</th><th class="score">Match</th>
+                  </tr></thead>
+                  <tbody>
+                    <tr class="cur">
+                      <td class="idx">1</td>
+                      <td>Inception.2010.1080p.BluRay.x264-SPARKS</td>
+                      <td class="lang">en</td>
+                      <td class="flags"><span class="flag-h">⤓hash</span> 1080p BD</td>
+                      <td class="dl">48k</td>
+                      <td class="score"><span class="sc-bar"><i style="width:96%"></i></span>96</td>
+                    </tr>
+                    <tr>
+                      <td class="idx">2</td>
+                      <td>Inception.2010.BluRay.Remux.1080p.AVC</td>
+                      <td class="lang">en</td>
+                      <td class="flags">1080p</td>
+                      <td class="dl">22k</td>
+                      <td class="score"><span class="sc-bar"><i style="width:81%"></i></span>81</td>
+                    </tr>
+                    <tr>
+                      <td class="idx">3</td>
+                      <td>Inception.2010.1080p.BluRay.HUN</td>
+                      <td class="lang">en</td>
+                      <td class="flags"><span class="flag-m">⚙AI</span></td>
+                      <td class="dl">9k</td>
+                      <td class="score"><span class="sc-bar"><i style="width:64%"></i></span>64</td>
+                    </tr>
+                    <tr>
+                      <td class="idx">4</td>
+                      <td>Inception.2010.1080p.BluRay.yts.mx</td>
+                      <td class="lang">en</td>
+                      <td class="flags">1080p</td>
+                      <td class="dl">6k</td>
+                      <td class="score"><span class="sc-bar"><i style="width:58%"></i></span>58</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div class="panel detail">
+                <div class="panel-h">preview · row 1</div>
+                <h3>Inception.2010.1080p.BluRay.x264-SPARKS</h3>
+                <div class="movie">Inception (2010) · Christopher Nolan</div>
+                <div class="kv">
+                  <div class="k">Language</div><div class="v">English (en)</div>
+                  <div class="k">Uploader</div><div class="v">sparks · 48,213 downloads</div>
+                  <div class="k">Source</div><div class="v">BluRay · 1080p</div>
+                  <div class="k">Hash match</div><div class="v" style="color:var(--accent)">✔ yes — exact file</div>
+                  <div class="k">Machine tr.</div><div class="v">no</div>
+                </div>
+                <div class="actions">
+                  <span class="btn pri">Download <span class="k">↵</span></span>
+                  <span class="btn">Preview <span class="k">p</span></span>
+                  <span class="btn">Copy URL <span class="k">y</span></span>
+                  <span class="btn">Sync+Clean <span class="k">s</span></span>
+                </div>
+              </div>
+            </div>
+
+            <div class="statusbar">
+              <span class="badge live">idle</span>
+              <span>backend: <b style="color:var(--ink)">OpenSubtitles</b></span>
+              <span class="sep">│</span>
+              <span>3 files queued</span>
+              <span class="sep">│</span>
+              <span>utf-8 · clean ✓ · sync: ask</span>
+              <div class="t-spacer"></div>
+              <span style="color:var(--ink-faint)">q quit · ? help · : cmd</span>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== DIRECTION 2 · PIPELINE ===================== -->
+    <div class="direction">
+      <div class="d-head">
+        <span class="d-num">B · WORKFLOW</span>
+        <div class="d-name">Pipeline</div>
+        <div class="d-tag">three-pane · batch-oriented · forgiving</div>
+        <div class="d-desc">
+          Inspired by <b>transmission-cli</b> + file managers. Three columns: files on the left (with Arabic/CJK names rendered natively), the active file's subtitle browser in the middle, post-download actions on the right. Each file is a stage that flows <i>scan → search → pick → clean → sync → done</i>. Best for bulk folder runs.
+        </div>
+      </div>
+
+      <div class="term">
+        <div class="term-bar">
+          <span class="term-title">subs · batch — /media/movies</span>
+          <span class="term-meta">↹ switch pane · space pick · n next file</span>
+        </div>
+        <div class="term-body">
+          <div class="pipe">
+
+            <div class="pipe-head">
+              <h2>Batch run · 5 files</h2>
+              <div class="pipe-stages">
+                <span class="stage done">scan ✓</span>
+                <span class="stage done">search ✓</span>
+                <span class="stage cur">pick</span>
+                <span class="stage">clean</span>
+                <span class="stage">sync</span>
+                <span class="stage">done</span>
+              </div>
+            </div>
+
+            <div class="pipe-body">
+
+              <!-- pane 1: files -->
+              <div class="panel" style="padding:10px">
+                <div class="panel-h">files · 5</div>
+                <div class="file-list">
+                  <div class="file done">
+                    <div class="name"><span class="check">✓</span>Dune.Part.Two.2024.1080p.mkv</div>
+                    <div class="meta">en · cleaned · synced · 0:42</div>
+                  </div>
+                  <div class="file active">
+                    <div class="name"><span class="pend">▸</span>Inception.2010.1080p.BluRay.mkv</div>
+                    <div class="meta" style="color:var(--accent-2)">searching… 4 candidates</div>
+                  </div>
+                  <div class="file">
+                    <div class="name ar"><span class="pend">·</span>الهيبة.mp4</div>
+                    <div class="meta">waiting · ar</div>
+                  </div>
+                  <div class="file">
+                    <div class="name zh"><span class="pend">·</span>流浪地球2.2023.mkv</div>
+                    <div class="meta">waiting · zh</div>
+                  </div>
+                  <div class="file">
+                    <div class="name"><span class="pend">·</span>oppenheimer.2023.2160p.mkv</div>
+                    <div class="meta">waiting · en</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- pane 2: candidates -->
+              <div class="panel" style="padding:0; overflow:hidden">
+                <div style="padding:8px 10px; border-bottom:1px solid var(--rule); display:flex; gap:8px; align-items:center">
+                  <span class="panel-h" style="margin:0">candidates</span>
+                  <div class="t-spacer"></div>
+                  <span class="lang-chip on">EN</span>
+                  <span class="lang-chip">All</span>
+                </div>
+                <table class="subs" style="font-size:11px">
+                  <thead><tr><th>Release</th><th>Match</th></tr></thead>
+                  <tbody>
+                    <tr class="cur"><td>Inception.2010.1080p.BluRay.x264-SPARKS<br><span style="color:var(--ink-faint); font-size:10px">⤓hash · 48k · sparks</span></td><td class="score">96</td></tr>
+                    <tr><td>Inception.2010.BluRay.Remux<br><span style="color:var(--ink-faint); font-size:10px">22k</span></td><td class="score">81</td></tr>
+                    <tr><td>Inception.2010.1080p.HUN<br><span style="color:var(--warn); font-size:10px">⚙ AI</span></td><td class="score">64</td></tr>
+                    <tr><td>Inception.2010.yts.mx<br><span style="color:var(--ink-faint); font-size:10px">6k</span></td><td class="score">58</td></tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <!-- pane 3: actions -->
+              <div class="panel" style="padding:10px">
+                <div class="panel-h">after download</div>
+                <div style="font-size:11px; line-height:1.9">
+                  <div><span class="badge ok">on</span>&nbsp; Force UTF-8</div>
+                  <div><span class="badge ok">on</span>&nbsp; Clean ads</div>
+                  <div><span class="badge warn">ask</span>&nbsp; Audio sync (ffsubsync)</div>
+                </div>
+                <div class="panel-h" style="margin-top:14px">this file</div>
+                <div style="display:flex; flex-direction:column; gap:6px">
+                  <span class="btn pri" style="text-align:center">Pick &amp; download <span class="k">↵</span></span>
+                  <span class="btn" style="text-align:center">Skip this file <span class="k">n</span></span>
+                  <span class="btn" style="text-align:center">Apply to all remaining</span>
+                </div>
+                <div class="panel-h" style="margin-top:14px">progress</div>
+                <div class="bar"><i style="width:20%"></i></div>
+                <div style="font-size:10px; color:var(--ink-faint); margin-top:4px">1 of 5 · ETA ~3m</div>
+              </div>
+
+            </div>
+
+            <div class="statusbar">
+              <span class="badge live">running</span>
+              <span>1 done · 1 active · 3 queued</span>
+              <div class="t-spacer"></div>
+              <span style="color:var(--ink-faint)">↹ pane · / filter · a apply-all · q quit</span>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== DIRECTION 3 · FOCUS ===================== -->
+    <div class="direction">
+      <div class="d-head">
+        <span class="d-num">C · SINGLE-TASK</span>
+        <div class="d-name">Focus</div>
+        <div class="d-tag">calm · one-thing-at-a-time · approachable</div>
+        <div class="d-desc">
+          Inspired by <b>gum</b> + <b>VHS</b>. No tables, no dense grids. One question per screen, big type, generous air. Backend → language → file → pick → done, each its own frame. Lowest cognitive load; best for the occasional user who just wants a subtitle and a clean result.
+        </div>
+      </div>
+
+      <div class="term">
+        <div class="term-bar">
+          <span class="term-title">subs — focus mode</span>
+          <span class="term-meta">↑↓ choose · ↵ confirm · ⌫ back</span>
+        </div>
+        <div class="term-body">
+          <div class="focus">
+
+            <div class="focus-hero">
+              <div class="now">Step 4 of 5 · choose subtitle</div>
+              <h2>Inception <span style="color:var(--ink-faint); font-weight:400">(2010)</span></h2>
+              <div class="sub">
+                <span class="ar">استقبال</span> · 1080p.BluRay · English
+              </div>
+            </div>
+
+            <div style="display:flex; gap:8px; align-items:center">
+              <span class="badge ok">hash match found</span>
+              <span style="color:var(--ink-faint); font-size:11px">we found an exact match for your file — recommended</span>
+            </div>
+
+            <div class="pick-grid">
+              <div class="pick top">
+                <div class="row1">
+                  <span class="sc">96</span>
+                  <span class="lang">English</span>
+                  <div class="t-spacer"></div>
+                  <span class="badge ok">best</span>
+                </div>
+                <div class="rel">Inception.2010.1080p.BluRay.x264-SPARKS</div>
+                <div class="foot">✔ hash · 48k downloads · by sparks · human</div>
+              </div>
+              <div class="pick">
+                <div class="row1">
+                  <span class="sc">81</span>
+                  <span class="lang">English</span>
+                </div>
+                <div class="rel">Inception.2010.BluRay.Remux.1080p.AVC</div>
+                <div class="foot">no hash · 22k · human</div>
+              </div>
+              <div class="pick">
+                <div class="row1">
+                  <span class="sc">64</span>
+                  <span class="lang">English</span>
+                </div>
+                <div class="rel">Inception.2010.1080p.BluRay.HUN</div>
+                <div class="foot"><span class="flag-m">⚙ machine translated</span></div>
+              </div>
+              <div class="pick">
+                <div class="row1">
+                  <span class="sc">58</span>
+                  <span class="lang">English</span>
+                </div>
+                <div class="rel">Inception.2010.1080p.BluRay.yts.mx</div>
+                <div class="foot">no hash · 6k · human</div>
+              </div>
+            </div>
+
+            <div class="statusbar" style="justify-content:space-between">
+              <span style="color:var(--ink-faint)">⌫ backend: OpenSubtitles · lang: English</span>
+              <span class="btn pri">Download this one <span class="k">↵</span></span>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /row -->
+
+  <!-- ============== comparison ============== -->
+  <section class="compare">
+    <h3>How they differ on the axes that matter</h3>
+    <table class="cmp">
+      <thead><tr><th></th><th>A · Command Deck</th><th>B · Pipeline</th><th>C · Focus</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Mental model</td>
+          <td>"I'm in a cockpit, drive it with keys"</td>
+          <td>"I'm processing a queue, left to right"</td>
+          <td>"I'm being asked one question at a time"</td>
+        </tr>
+        <tr>
+          <td>Best for</td>
+          <td class="win">Power users, single-file quick grabs</td>
+          <td class="win">Bulk folder runs, mixed-language libraries</td>
+          <td class="win">Occasional users, low cognitive load</td>
+        </tr>
+        <tr>
+          <td>Keyboard model</td>
+          <td>Vim-ish (jk / enter / :)</td>
+          <td>Pane-aware (↹ tabs, space pick)</td>
+          <td>Arrow + enter only</td>
+        </tr>
+        <tr>
+          <td>Multilingual fit</td>
+          <td>Good (table wraps CJK/RTL)</td>
+          <td class="win">Best — file pane shows native names per-row</td>
+          <td>Good (big type reads well)</td>
+        </tr>
+        <tr>
+          <td>Density</td>
+          <td class="win">Highest</td>
+          <td>Medium-high</td>
+          <td>Lowest</td>
+        </tr>
+        <tr>
+          <td>Build effort (Textual)</td>
+          <td>Medium — DataTable + tabs</td>
+          <td>Higher — 3 panes + state machine</td>
+          <td>Lower — a few sequential screens</td>
+        </tr>
+        <tr>
+          <td>Maps to your code how</td>
+          <td>Replaces <code>manual_select_subtitle</code> + menus</td>
+          <td>Replaces <code>process_media_list</code> outer loop</td>
+          <td>Replaces the numbered <code>_ask_backend</code>/<code>_show_language_menu</code> prompts</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="legend">
+      <span><b>⤓hash</b> = moviehash exact match</span>
+      <span><b>⚙AI</b> = machine-translated subtitle</span>
+      <span><b>Match</b> = your <code>score_subtitle</code> normalized 0–100</span>
+      <span><b>D/L</b> = download_count</span>
+      <span style="color:var(--accent)">green row</span> = keyboard cursor / selected
+    </div>
+
+    <div class="note">
+      <b>My recommendation: A (Command Deck) as the spine, with B's file-list pane grafted in for batch runs</b> — it's the layout that scales from "one file" to "a whole season" without changing mental model, and the keyboard-first density matches a tool you'll use often.
+      C is the right <i>onboarding/quick</i> mode but too low-density as the only interface for a power tool.
+      <br><br>
+      Open this file in a browser to compare at full size. Tell me: <b>pick one</b>, <b>pick one + graft an axis from another</b>, or <b>"none, try again"</b> and I'll iterate.
+    </div>
+  </section>
+
+</div>
+</body>
+</html>
