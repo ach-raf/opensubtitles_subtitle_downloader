@@ -33,7 +33,14 @@ class ResultsTable(DataTable):
                 key=candidate.key,
             )
         if self.row_count:
-            row = min(app.cursor_index, self.row_count - 1)
+            self.sync_cursor(app.cursor_index)
+
+    def sync_cursor(self, index: int) -> None:
+        """Move the visual cursor without rebuilding candidate rows."""
+        if not self.row_count:
+            return
+        row = min(max(index, 0), self.row_count - 1)
+        if self.cursor_row != row:
             self.move_cursor(row=row)
 
 

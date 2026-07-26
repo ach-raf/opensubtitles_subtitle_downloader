@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -585,8 +586,13 @@ class SubsApp(App):
         else:
             self.notice = f"{len(result.candidates)} candidates ready"
         self._refresh_all()
+        self.call_after_refresh(self._focus_results)
         if result.candidates and self.application_config.general.auto_selection:
             self.action_download_cursor()
+
+    def _focus_results(self) -> None:
+        if self.candidates and self.state.active_view == "search":
+            self.query_one(ResultsTable).focus()
 
     def action_show_view(self, view: str) -> None:
         if (
@@ -1038,6 +1044,10 @@ class SubsApp(App):
     def on_result_highlighted(self, event: DataTable.RowHighlighted) -> None:
         self.cursor_index = event.cursor_row
 
+    @on(DataTable.RowSelected, "#results-table")
+    def on_result_selected(self) -> None:
+        self.action_download_cursor()
+
     @on(Button.Pressed)
     def on_button(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
@@ -1202,7 +1212,9 @@ class SubsApp(App):
         self._refresh_search()
 
     def watch_cursor_index(self, _value) -> None:
-        self._refresh_search()
+        with suppress(NoMatches):
+            self.query_one(ResultsTable).sync_cursor(self.cursor_index)
+        self._safe_refresh_by_id("#detail-panel")
 
     def watch_query(self, _value) -> None:
         self._refresh_query()

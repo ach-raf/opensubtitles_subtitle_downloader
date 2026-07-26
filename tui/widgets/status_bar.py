@@ -12,7 +12,7 @@ class StatusBar(Horizontal):
         yield Static("", id="status-message")
         yield Static("", id="status-progress")
         yield Static(
-            "b/l setup · / query · p preview · y copy · m merge · ? help · q quit",
+            "↑/↓ or j/k move · ↵ download · b/l setup · / query · ? help · q quit",
             id="status-hints",
         )
 

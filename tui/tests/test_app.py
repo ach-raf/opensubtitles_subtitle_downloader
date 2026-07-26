@@ -159,6 +159,66 @@ def test_cursor_navigation_updates_typed_selection(configured_app):
     asyncio.run(run())
 
 
+def test_completed_search_focuses_results_for_arrow_navigation(configured_app):
+    app, _ = configured_app
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause(0.3)
+            table = app.query_one(ResultsTable)
+            assert app.focused is table
+
+            await pilot.press("down")
+            await pilot.pause()
+            assert app.cursor_index == 1
+            assert app.current_candidate().provider_id == "2"
+
+    asyncio.run(run())
+
+
+def test_cursor_change_does_not_rebuild_results_table(configured_app):
+    app, _ = configured_app
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause(0.3)
+            table = app.query_one(ResultsTable)
+            original_clear = table.clear
+            clear_calls = 0
+
+            def tracked_clear(*args, **kwargs):
+                nonlocal clear_calls
+                clear_calls += 1
+                return original_clear(*args, **kwargs)
+
+            table.clear = tracked_clear
+            await pilot.press("j")
+            await pilot.pause(0.1)
+
+            assert app.cursor_index == 1
+            assert clear_calls == 0
+
+    asyncio.run(run())
+
+
+def test_enter_downloads_highlighted_result_from_focused_table(configured_app):
+    app, _ = configured_app
+    selected = []
+    app.run_download = lambda _item_key, candidate, _overwrite: selected.append(
+        candidate.key
+    )
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause(0.3)
+            await pilot.press("down", "enter")
+            await pilot.pause()
+
+            assert selected == ["subdl:2"]
+
+    asyncio.run(run())
+
+
 def test_narrow_terminal_hides_detail_without_hiding_results(configured_app):
     app, _ = configured_app
 
