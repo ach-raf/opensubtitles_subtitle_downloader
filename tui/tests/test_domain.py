@@ -44,3 +44,8 @@ def test_search_request_keeps_effective_query():
 
     assert request.query == "Director Cut"
     assert EngineMode.ASK.value == "ask"
+
+
+def test_string_enums_serialize_as_their_values():
+    assert str(Provider.SUBDL) == "subdl"
+    assert str(EngineMode.AUTO) == "auto"

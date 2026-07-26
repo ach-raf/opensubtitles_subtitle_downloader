@@ -10,8 +10,8 @@ fields in Textual ``reactive`` on the ``SubsApp``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import StrEnum
 
+from tui.compat import StrEnum
 from tui.config import ApplicationConfig
 from tui.domain import (
     Candidate,

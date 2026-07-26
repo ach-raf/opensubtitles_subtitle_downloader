@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import StrEnum
 from pathlib import Path
 from typing import Any
+
+from tui.compat import StrEnum
 
 
 class Provider(StrEnum):
