@@ -232,17 +232,33 @@ DetailPane {
     scrollbar-color: $line;
 }
 
+#config-view {
+    padding: 0 2;
+}
+
+#config-view > .view-title {
+    height: 2;
+    padding: 0 1;
+    content-align: left middle;
+}
+
+#config-view > .view-subtitle {
+    height: 1;
+    padding: 0 1;
+}
+
 .config-heading {
-    height: 3;
-    margin-top: 1;
-    padding: 1;
+    height: 2;
+    margin-top: 0;
+    padding: 0 1;
+    content-align: left middle;
     color: $amber;
     text-style: bold;
     border-bottom: solid $line;
 }
 
 .config-row {
-    height: 4;
+    height: 3;
     padding: 0 1;
     align-vertical: middle;
 }
@@ -270,7 +286,7 @@ DetailPane {
 }
 
 #config-actions {
-    height: 5;
+    height: 3;
     dock: bottom;
     align-vertical: middle;
     background: $surface;

@@ -111,12 +111,7 @@ class OpenSubtitles:
             self.console.print(f"[bold red]Unexpected error during search: {e}[/]")
             return None
 
-    def search_candidates(self, path, language, query=""):
-        """Return raw candidates for a non-interactive caller.
-
-        Unlike the legacy interactive flow, a failed request raises so callers
-        can distinguish provider failure from a valid empty result.
-        """
+    def _gather_candidates(self, path, language, query=""):
         media_path = Path(path)
         media_hash = ""
         if media_path.is_file():
@@ -125,12 +120,40 @@ class OpenSubtitles:
             except (OSError, ValueError):
                 media_hash = ""
         effective_query = query.strip() or media_path.stem
-        results = self.search(
-            media_hash=media_hash,
-            media_name=effective_query,
-            languages=language,
+        queries = [effective_query]
+        series_match = re.search(
+            r"(.+?)(?:\s-\sS\d{2}E\d{2}|\s-\s\d{4})",
+            effective_query,
         )
-        if results is None:
+        if series_match:
+            queries.append(series_match.group(1))
+        queries.extend(self.subtitle_utils.get_alternate_names(effective_query) or [])
+
+        results = []
+        request_failed = False
+        for media_name in dict.fromkeys(queries):
+            found = self.search(
+                media_hash=media_hash,
+                media_name=media_name,
+                languages=language,
+            )
+            if found is None:
+                request_failed = True
+                continue
+            results.extend(found)
+        return (
+            list({row["id"]: row for row in results}.values()),
+            request_failed,
+        )
+
+    def search_candidates(self, path, language, query=""):
+        """Return aggregated candidates for a non-interactive caller."""
+        results, request_failed = self._gather_candidates(
+            path,
+            language,
+            query,
+        )
+        if not results and request_failed:
             raise RuntimeError("OpenSubtitles search request failed")
         return results
 
@@ -188,7 +211,6 @@ class OpenSubtitles:
     def process_media_file(self, media_path, language_choice, media_name=""):
         try:
             path = Path(media_path)
-            hash = self.subtitle_utils.hashFile(media_path)
             if not media_name:
                 media_name = path.stem
             rprint(
@@ -196,60 +218,18 @@ class OpenSubtitles:
                 f"[yellow]{media_name}[/yellow]"
             )
             subtitle_path = Path(path.parent, f"{path.stem}.{language_choice}.srt")
-            results = self.search(
-                media_hash=hash, media_name=media_name, languages=language_choice
+            results, _request_failed = self._gather_candidates(
+                path,
+                language_choice,
+                media_name,
             )
-            if not results:
-                rprint(f"[red]No subtitles found for {media_name}[/red]")
-            else:
-                rprint(f"[green]Found {len(results)} results[/green]")
-
-            # Parse the series name and search by that alone. This also handles
-            # long release names that include season, episode, and codec tags.
-            series_name = re.search(
-                r"(.+?)(?:\s-\sS\d{2}E\d{2}|\s-\s\d{4})", media_name
-            )
-
-            if series_name:
-                series_name = series_name.group(1)
-                rprint(
-                    "[cyan]Searching for subtitles for series[/cyan] "
-                    f"[yellow]{series_name}[/yellow]"
-                )
-                temp_results = self.search(
-                    media_hash=hash, media_name=series_name, languages=language_choice
-                )
-                if temp_results:
-                    results.extend(temp_results)
-                    rprint(
-                        "[blue]Adding more results by searching for[/blue] "
-                        f"[yellow]{series_name}[/yellow], "
-                        f"[green]found {len(temp_results)} results[/green]"
-                    )
-
-            # Add more results using alternate names
-            new_search_terms = self.subtitle_utils.get_alternate_names(media_name)
-            if new_search_terms:
-                for term in new_search_terms:
-                    temp_results = self.search(
-                        media_hash=hash,
-                        media_name=term,
-                        languages=language_choice,
-                    )
-                    if temp_results:
-                        results.extend(temp_results)
-                        rprint(
-                            "[blue]Adding more results by searching for[/blue] "
-                            f"[yellow]{term}[/yellow], "
-                            f"[green]found {len(temp_results)} results[/green]"
-                        )
-
             if not results:
                 rprint(f"[red]No subtitles found for {media_name}[/red]")
                 return False
-
-            # remove duplicates
-            results = list({v["id"]: v for v in results}.values())
+            rprint(
+                f"[green]Total unique results after all searches: "
+                f"{len(results)}[/green]"
+            )
 
             sorted_results = self.subtitle_utils.sort_list_of_dicts_by_key(
                 results, "download_count"

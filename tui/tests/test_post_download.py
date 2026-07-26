@@ -1,5 +1,7 @@
 import asyncio
 
+from textual.widgets import Static
+
 from tui.app import ConfirmReplace, ConfirmSync, SubsApp
 from tui.domain import (
     Candidate,
@@ -154,6 +156,10 @@ def test_ask_sync_policy_prompts_and_honors_choice(tmp_path):
             app.action_download_cursor()
             await pilot.pause(0.2)
             assert isinstance(app.screen, ConfirmSync)
+            title = app.screen.query_one(Static)
+            assert title.region.x > 0
+            assert title.region.y > 0
+            assert title.region.width < app.screen.region.width
             await pilot.press("n")
             await pilot.pause(0.2)
             assert jobs.postprocess_calls[-1]["sync"] is False

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from library.OpenSubtitles import OpenSubtitles
 from tui.domain import Provider, SearchRequest
 from tui.providers.opensubtitles import OpenSubtitlesAdapter
 from tui.providers.subdl import SubDLAdapter
@@ -91,3 +92,46 @@ def test_missing_provider_id_gets_stable_source_scoped_fingerprint():
 
     assert first.candidates[0].key == second.candidates[0].key
     assert first.candidates[0].key.startswith("opensubtitles:fingerprint-")
+
+
+def test_opensubtitles_candidates_restore_legacy_cascading_search(tmp_path):
+    media = tmp_path / "Dune - Prophecy (2024) - S01E01.mkv"
+    media.touch()
+    client = object.__new__(OpenSubtitles)
+    client.subtitle_utils = type(
+        "SearchUtils",
+        (),
+        {
+            "hashFile": staticmethod(lambda _path: "movie-hash"),
+            "get_alternate_names": staticmethod(
+                lambda _name: ["Dune Prophecy S01E01", "Dune.Prophecy.1x01"]
+            ),
+        },
+    )()
+    calls = []
+
+    def search(*, media_hash, media_name, languages):
+        calls.append((media_hash, media_name, languages))
+        return [
+            {
+                "id": f"id-{len(calls)}",
+                "attributes": {"release": media_name},
+            },
+            {
+                "id": "shared",
+                "attributes": {"release": "duplicate"},
+            },
+        ]
+
+    client.search = search
+
+    results = client.search_candidates(media, "en", media.stem)
+
+    assert [call[1] for call in calls] == [
+        media.stem,
+        "Dune - Prophecy (2024)",
+        "Dune Prophecy S01E01",
+        "Dune.Prophecy.1x01",
+    ]
+    assert all(call[0] == "movie-hash" for call in calls)
+    assert len(results) == 5

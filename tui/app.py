@@ -99,7 +99,10 @@ class ConfirmReplace(ModalScreen[bool]):
 
 
 class ConfirmSync(ModalScreen[bool]):
-    DEFAULT_CSS = ConfirmReplace.DEFAULT_CSS
+    DEFAULT_CSS = ConfirmReplace.DEFAULT_CSS.replace(
+        "ConfirmReplace",
+        "ConfirmSync",
+    )
     BINDINGS = [
         Binding("y", "confirm", "Sync", show=False),
         Binding("n", "cancel", "Do not sync", show=False),
@@ -168,7 +171,10 @@ class CandidatePreview(ModalScreen[None]):
 
 
 class ConfirmQuit(ModalScreen[bool]):
-    DEFAULT_CSS = ConfirmReplace.DEFAULT_CSS
+    DEFAULT_CSS = ConfirmReplace.DEFAULT_CSS.replace(
+        "ConfirmReplace",
+        "ConfirmQuit",
+    )
     BINDINGS = [
         Binding("y", "confirm", "Quit", show=False),
         Binding("n", "cancel", "Stay", show=False),
@@ -259,7 +265,10 @@ class ConfirmConfigSave(ModalScreen[bool]):
 
 
 class ConfirmConfigExit(ModalScreen[str | None]):
-    DEFAULT_CSS = ConfirmConfigSave.DEFAULT_CSS
+    DEFAULT_CSS = ConfirmConfigSave.DEFAULT_CSS.replace(
+        "ConfirmConfigSave",
+        "ConfirmConfigExit",
+    )
     BINDINGS = [
         Binding("s", "save", "Save", show=False),
         Binding("d", "discard", "Discard", show=False),

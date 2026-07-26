@@ -449,6 +449,8 @@ def test_quit_with_unfinished_queue_requires_confirmation(configured_app):
             app.action_request_quit()
             await pilot.pause()
             assert isinstance(app.screen, ConfirmQuit)
+            assert app.screen.query_one(Static).region.x > 0
+            assert app.screen.query_one(Static).region.y > 0
 
     asyncio.run(run())
 
@@ -484,6 +486,8 @@ def test_config_draft_survives_refresh_and_blocks_accidental_navigation(
             await pilot.press("1")
             assert app.state.active_view == "config"
             assert isinstance(app.screen, ConfirmConfigExit)
+            assert app.screen.query_one(Static).region.x > 0
+            assert app.screen.query_one(Static).region.y > 0
 
             await pilot.press("d")
             await pilot.pause()

@@ -31,3 +31,11 @@ class StatusBar(Horizontal):
             f"{done}/{len(app.state.queue)} complete"
             + (" · MERGE" if app.merge_mode else "")
         )
+        hints = self.query_one("#status-hints", Static)
+        if app.state.active_view == "config":
+            hints.update("Tab move · Space toggle · Ctrl+S save")
+        else:
+            hints.update(
+                "↑/↓ or j/k move · ↵ download · b/l setup · "
+                "/ query · ? help · q quit"
+            )

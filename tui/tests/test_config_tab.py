@@ -65,6 +65,30 @@ def test_config_is_a_real_view_with_all_supported_controls(tmp_path):
             assert view.query_one("#config-ai", Switch)
             assert view.query_one("#config-clean", Switch)
             assert view.query_one("#config-ads", Input)
+            assert "draft" in str(view.query_one(".view-subtitle").content).lower()
+            assert "Ctrl+S" in str(app.query_one("#status-hints").content)
+
+    asyncio.run(run())
+
+
+def test_config_keeps_a_usable_scroll_viewport_at_standard_terminal_size(tmp_path):
+    path = tmp_path / "config.yaml"
+    path.write_text(CONFIG_TEXT, encoding="utf-8")
+    app = SubsApp(
+        config=yaml.safe_load(CONFIG_TEXT),
+        media_paths=[],
+        overrides={},
+        config_path=str(path),
+    )
+
+    async def run():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.press("4")
+            await pilot.pause()
+
+            scroll = app.query_one("#config-scroll")
+            assert scroll.region.height >= 10
+            assert scroll.max_scroll_y < 50
 
     asyncio.run(run())
 

@@ -178,7 +178,7 @@ class ConfigView(Container):
     def compose(self) -> ComposeResult:
         yield Static("CONFIG", classes="view-title")
         yield Static(
-            "Session changes apply immediately. Save writes every supported "
+            "Edit a draft here. Ctrl+S reviews and saves every supported "
             "field atomically.",
             classes="view-subtitle",
         )
