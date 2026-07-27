@@ -1,4 +1,8 @@
 @echo off
+if not defined WT_SESSION (
+    start "" wt.exe -d "D:\PycharmProjects\new_opensubtitles" cmd.exe /d /k call "%~f0" %*
+    exit /b
+)
+
 cls
-cmd /k "cd /d D:\PycharmProjects\new_opensubtitles\venv\Scripts & activate & cd /d  D:\PycharmProjects\new_opensubtitles & python download_subs.py %*
-pause
+"D:\PycharmProjects\new_opensubtitles\venv\Scripts\python.exe" "D:\PycharmProjects\new_opensubtitles\download_subs.py" %*
