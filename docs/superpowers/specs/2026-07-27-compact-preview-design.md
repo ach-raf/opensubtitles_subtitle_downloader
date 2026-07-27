@@ -21,10 +21,11 @@ preview to the space its content actually needs.
 
 - Keep one result per row so vertical capacity does not decrease.
 - Give the release-name column first claim on reclaimed width.
-- Keep the numeric match score visible and visually distinct from its compact
-  score bar.
+- Keep the numeric match score visible and visually distinct.
 - Retain language, flags, download count, and provider information where the
   available terminal width permits.
+- Remove the low-value row-number column and decorative score bar when their
+  cells are needed to preserve the full release name and numeric score.
 - Continue using the current row selection and keyboard navigation behavior.
 
 ## Preview Pane

@@ -28,7 +28,8 @@ class SearchView(Container):
         with Horizontal(id="search-split"):
             with Container(id="results-panel"):
                 yield Static(
-                    "RESULTS  ·  sorted by match",
+                    "RESULTS  ·  SORTED BY MATCH",
+                    id="results-heading",
                     classes="panel-title",
                 )
                 yield ResultsTable()

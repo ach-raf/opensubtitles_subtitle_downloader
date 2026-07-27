@@ -143,7 +143,9 @@ def test_all_providers_choice_updates_engine_label_and_search_mode(configured_ap
 
             assert app.merge_mode is True
             assert app.application_config.general.merge_results is True
-            assert app.query_one("#chip-engine", Button).label == "All providers ▾"
+            assert "ENGINE All providers" in str(
+                app.query_one("#chip-engine", Button).label
+            )
             assert coordinator.requests
 
     asyncio.run(run())
@@ -230,6 +232,92 @@ def test_results_and_multilingual_detail_are_visible(configured_app):
             await pilot.pause(0.3)
             assert app.query_one(ResultsTable).row_count == 2
             assert "الهيبة" in app.query_one("#detail-title", Static).content
+            detail = str(app.query_one("#detail-kv", Static).content)
+            assert "Match" in detail
+            assert "94" in detail
+            assert detail.count("\n") <= 3
+            assert str(app.query_one("#download-selected", Button).label) == "Get  ↵"
+            assert str(app.query_one("#preview-selected", Button).label) == "View  p"
+            assert str(app.query_one("#copy-url", Button).label) == "URL  y"
+
+    asyncio.run(run())
+
+
+def test_command_deck_chrome_matches_compact_visual_contract(configured_app):
+    app, _ = configured_app
+
+    async def run():
+        async with app.run_test(size=(140, 42)) as pilot:
+            await pilot.pause(0.3)
+
+            assert app.query_one("TopBar").region.height == 3
+            assert app.query_one("QueryBar").region.height == 3
+            assert "ENGINE" in str(app.query_one("#chip-engine", Button).label)
+            assert "LANG" in str(app.query_one("#chip-language", Button).label)
+            assert app.query_one("#chip-command", Button).label
+            assert app.query_one("#chip-health", Static).content
+
+            status = app.query_one("#status-settings", Static).content
+            assert "engine" in status
+            assert "lang" in status
+            assert "utf-8" in status
+            assert "clean" in status
+            assert "sync" in status
+            assert "HI" in status
+
+    asyncio.run(run())
+
+
+def test_search_workbench_exposes_mockup_panel_content(configured_app):
+    app, _ = configured_app
+
+    async def run():
+        async with app.run_test(size=(140, 42)) as pilot:
+            await pilot.pause(0.3)
+
+            results_panel = app.query_one("#results-panel")
+            detail_panel = app.query_one("#detail-panel")
+            assert results_panel.region.width >= detail_panel.region.width * 2
+            assert 30 <= detail_panel.region.width <= 42
+            assert "RESULTS" in app.query_one("#results-heading", Static).content
+            assert "sorted by match" in app.query_one(
+                "#results-heading", Static
+            ).content.lower()
+            assert "PREVIEW" in app.query_one("#preview-heading", Static).content
+            assert app.query_one("#preview-selected", Button)
+            assert app.query_one("#copy-url", Button)
+
+    asyncio.run(run())
+
+
+def test_results_table_keeps_release_and_numeric_score_visible(configured_app):
+    app, coordinator = configured_app
+    coordinator.candidates = [
+        Candidate(
+            provider=Provider.SUBDL,
+            provider_id="long-release",
+            release=(
+                "Inception.2010.2160p.UHD.BluRay.REMUX."
+                "HDR.HEVC.TrueHD.Atmos-FullReleaseName"
+            ),
+            language="en",
+            download_count=48213,
+            score=96,
+        )
+    ]
+
+    async def run():
+        async with app.run_test(size=(140, 42)) as pilot:
+            await pilot.pause(0.3)
+
+            table = app.query_one(ResultsTable)
+            assert list(table.columns.values())[0].label.plain == "Release"
+            release_column = list(table.columns.values())[0]
+            assert release_column.width >= 75
+            assert table.get_cell_at((0, 1)) == " EN"
+            rendered_score = table.get_cell_at((0, len(table.columns) - 1))
+            assert rendered_score.plain == " 96"
+            assert table.max_scroll_x == 0
 
     asyncio.run(run())
 
@@ -350,10 +438,13 @@ def test_narrow_terminal_hides_detail_without_hiding_results(configured_app):
     app, _ = configured_app
 
     async def run():
-        async with app.run_test(size=(80, 24)) as pilot:
+        async with app.run_test(size=(100, 32)) as pilot:
             await pilot.pause(0.2)
             assert app.query_one("#detail-panel").display is False
             assert app.query_one(ResultsTable).display is True
+            assert app.query_one("#chip-command").display is False
+            assert app.query_one("#chip-health").display is False
+            assert app.query_one("#status-settings").display is False
 
     asyncio.run(run())
 

@@ -1,13 +1,23 @@
-$canvas: #090d12;
-$surface: #101720;
-$surface-raised: #151f2b;
-$line: #263446;
-$ink: #e7edf5;
-$muted: #8390a2;
-$blue: #75a7ff;
-$green: #68d5a4;
-$amber: #e7b96a;
+/* Hallmark · genre: technical-austere · macrostructure: Workbench
+ * theme: Terminal · designed-as-app · design-system: design.md
+ * pre-emit critique: P5 H5 E4 S5 R5 V4 · contrast: pass
+ */
+
+$canvas: #070b10;
+$surface: #0d141b;
+$surface-raised: #121b24;
+$line: #2a3745;
+$ink: #e9eef5;
+$muted: #78889a;
+$blue: #72a8ff;
+$green: #69e49d;
+$amber: #f0ba62;
 $red: #ef7777;
+$dark-ink: #07110d;
+$rule-soft: #1c2732;
+$selection: #183126;
+$selection-soft: #14251f;
+$disabled: #4d5966;
 
 Screen {
     background: $canvas;
@@ -349,4 +359,365 @@ Notification {
     background: $surface-raised;
     border: round $blue;
     color: $ink;
+}
+
+/* Command deck density and chrome */
+TopBar {
+    height: 3;
+    padding: 0 1;
+    background: $surface;
+    border-bottom: solid $line;
+}
+
+#brand {
+    width: 9;
+    height: 3;
+    color: $ink;
+    content-align: left middle;
+}
+
+.tab {
+    width: auto;
+    min-width: 9;
+    height: 3;
+    padding: 0 1;
+    border: none;
+    color: $muted;
+    background: transparent;
+}
+
+.tab:hover {
+    color: $ink;
+    background: $surface-raised;
+}
+
+.tab.active {
+    color: $ink;
+    background: $canvas;
+    border: solid $line;
+    border-bottom: heavy $green;
+}
+
+.chip {
+    width: auto;
+    min-width: 12;
+    height: 3;
+    margin-left: 1;
+    padding: 0;
+    border: solid $line;
+    background: $surface;
+    color: $muted;
+}
+
+#chip-engine {
+    min-width: 19;
+}
+
+#chip-language {
+    width: 11;
+    min-width: 11;
+}
+
+#chip-command {
+    min-width: 14;
+    color: $ink;
+}
+
+.chip:hover,
+.chip:focus {
+    border: solid $green;
+    color: $ink;
+}
+
+.health-chip {
+    width: auto;
+    min-width: 17;
+    height: 3;
+    margin-left: 1;
+    padding: 0 1;
+    border: solid #286742;
+    background: $canvas;
+    content-align: center middle;
+}
+
+/* Search workbench */
+#search-view {
+    padding: 1 2;
+}
+
+QueryBar {
+    height: 3;
+    padding: 0 1;
+    border: solid $line;
+    background: $surface-raised;
+}
+
+#query-label {
+    width: 8;
+    height: 1;
+    color: $muted;
+    content-align: left middle;
+}
+
+#query-input {
+    height: 1;
+    padding: 0 1;
+    border: none;
+    background: transparent;
+    color: $ink;
+}
+
+#query-input:focus {
+    border: none;
+    background: $canvas;
+}
+
+#query-meta {
+    width: 20;
+    height: 1;
+    color: $muted;
+    content-align: right middle;
+}
+
+#search-state {
+    height: 2;
+    padding: 0 1;
+    color: $muted;
+    background: $canvas;
+    border-bottom: none;
+    content-align: left middle;
+}
+
+#search-split {
+    height: 1fr;
+}
+
+#results-panel {
+    width: 18fr;
+    height: 100%;
+    padding: 0;
+    border: solid $line;
+    background: $surface;
+}
+
+.panel-title {
+    height: 3;
+    padding: 1 1 0 1;
+    color: $muted;
+    text-style: none;
+    background: $surface;
+}
+
+ResultsTable {
+    height: 1fr;
+    padding: 0 1;
+    border: none;
+    background: $surface;
+}
+
+DataTable > .datatable--header {
+    background: $surface;
+    color: $muted;
+    text-style: none;
+}
+
+DataTable > .datatable--cursor {
+    background: $selection-soft;
+    color: $ink;
+    text-style: bold;
+}
+
+DataTable:focus > .datatable--cursor {
+    background: $selection;
+    color: $ink;
+}
+
+DetailPane {
+    width: 7fr;
+    min-width: 30;
+    height: 100%;
+    margin-left: 1;
+    padding: 0 1;
+    border: solid $line;
+    background: $surface;
+}
+
+#detail-title {
+    height: auto;
+    min-height: 3;
+    margin: 0;
+    padding: 0 1;
+    color: $ink;
+    text-style: bold;
+}
+
+#detail-provider {
+    height: 2;
+    padding: 0 1;
+    color: $amber;
+}
+
+#detail-kv {
+    height: auto;
+    margin: 1 0 0 0;
+    padding: 0 1;
+    color: $ink;
+}
+
+#detail-actions {
+    height: 3;
+    margin: 1 1 0 1;
+}
+
+#detail-actions Button {
+    width: 1fr;
+    min-width: 8;
+    height: 3;
+    margin-right: 1;
+    padding: 0 1;
+    border: solid $line;
+    background: $surface;
+    color: $muted;
+}
+
+#download-selected {
+    min-width: 11;
+}
+
+#detail-actions Button:hover,
+#detail-actions Button:focus {
+    color: $ink;
+    border: solid $blue;
+}
+
+#detail-actions Button.-primary {
+    color: $dark-ink;
+    background: $green;
+    border: solid $green;
+}
+
+/* Persistent operational rail */
+StatusBar {
+    height: 3;
+    padding: 0 1;
+    border-top: solid $line;
+    background: $surface;
+}
+
+#status-message {
+    width: auto;
+    min-width: 8;
+    height: 1;
+    padding: 0 1;
+    color: $ink;
+    border: none;
+    content-align: left middle;
+}
+
+#status-progress {
+    width: auto;
+    min-width: 9;
+    height: 1;
+    padding: 0 1;
+    color: $muted;
+    content-align: center middle;
+}
+
+#status-settings {
+    width: 68;
+    height: 1;
+    padding: 0 1;
+    color: $muted;
+    content-align: left middle;
+}
+
+#status-hints {
+    width: 1fr;
+    height: 1;
+    color: $muted;
+    content-align: right middle;
+}
+
+/* Secondary workspaces share the command-deck voice. */
+#queue-view,
+#history-view,
+#config-view {
+    padding: 1 2;
+    background: $canvas;
+}
+
+.view-title {
+    height: 2;
+    padding: 0 1;
+    color: $ink;
+    text-style: bold;
+}
+
+.view-subtitle {
+    height: 2;
+    padding: 0 1;
+    color: $muted;
+}
+
+#queue-table,
+#history-table,
+#config-provider-languages {
+    border: solid $line;
+    background: $surface;
+}
+
+.config-heading {
+    color: $amber;
+    border-bottom: solid $line;
+}
+
+.config-row {
+    border-bottom: solid $rule-soft;
+}
+
+#config-actions {
+    border: solid $line;
+    background: $surface;
+}
+
+/* Overlays lift by contrast, not oversized rounded chrome. */
+EngineSwitcher > Vertical,
+LanguagePopover > Vertical,
+Palette > Vertical,
+ConfirmReplace > Vertical,
+ConfirmSync > Vertical,
+ConfirmQuit > Vertical,
+ConfirmConfigSave > Vertical,
+ConfirmConfigExit > Vertical,
+CandidatePreview > Vertical {
+    background: $surface;
+    border: solid $blue;
+}
+
+Notification {
+    background: $surface-raised;
+    border: solid $blue;
+    color: $ink;
+}
+
+OptionList > .option-list--option-highlighted {
+    color: $dark-ink;
+    background: $green;
+    text-style: bold;
+}
+
+OptionList > .option-list--option-hover {
+    color: $ink;
+    background: $surface-raised;
+}
+
+OptionList > .option-list--option-disabled {
+    color: $disabled;
+    background: $surface;
+}
+
+EngineSwitcher OptionList,
+EngineSwitcher OptionList:focus {
+    border: none;
+    background: $surface;
 }

@@ -308,6 +308,7 @@ class ConfirmConfigExit(ModalScreen[str | None]):
 
 class SubsApp(App):
     CSS_PATH = "style.tcss"
+    TITLE = "subs — command deck"
 
     BINDINGS = [
         Binding("1", "show_view('search')", "Search", show=False),
@@ -1067,7 +1068,13 @@ class SubsApp(App):
 
     def on_resize(self, event) -> None:
         try:
-            self.query_one("#detail-panel").display = event.size.width >= 100
+            width = event.size.width
+            self.query_one("#detail-panel").display = width >= 115
+            self.query_one("#chip-health").display = width >= 120
+            self.query_one("#chip-command").display = width >= 105
+            self.query_one("#status-settings").display = width >= 110
+            self.query_one("#status-progress").display = width >= 70
+            self.query_one("#status-hints").display = width >= 60
         except NoMatches:
             return
 
@@ -1104,6 +1111,8 @@ class SubsApp(App):
             self.action_open_palette()
         elif button_id == "download-selected":
             self.action_download_cursor()
+        elif button_id == "preview-selected":
+            self.action_preview()
         elif button_id == "copy-url":
             self.action_copy_url()
         elif button_id == "config-save":

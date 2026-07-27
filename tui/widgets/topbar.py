@@ -26,6 +26,8 @@ class TopBar(Horizontal):
         yield Static("", classes="top-spacer")
         yield Button("", id="chip-engine", classes="chip", flat=True)
         yield Button("", id="chip-language", classes="chip", flat=True)
+        yield Button("⌘K COMMAND", id="chip-command", classes="chip utility", flat=True)
+        yield Static("", id="chip-health", classes="health-chip")
 
     def refresh_from_state(self, app) -> None:
         for view in ("search", "queue", "history", "config"):
@@ -44,7 +46,27 @@ class TopBar(Horizontal):
             if app.merge_mode
             else "Choose engine" if mode.value == "ask" else mode.label
         )
-        self.query_one("#chip-engine", Button).label = f"{engine_label} ▾"
+        self.query_one("#chip-engine", Button).label = (
+            f"ENGINE [blue]{engine_label}[/blue]  ▾"
+        )
         self.query_one("#chip-language", Button).label = (
-            f"{app.state.language.upper()} ▾"
+            f"LANG [green]{app.state.language.upper()}[/green]  ▾"
+        )
+        provider = mode.provider
+        health = app.health.get(provider) if provider else None
+        if app.merge_mode:
+            health_label = "ALL · LIVE"
+        elif health is None:
+            health_label = f"{mode.label.upper()} · READY"
+        elif health.reachable:
+            latency = (
+                f"{health.latency_ms}MS"
+                if health.latency_ms is not None
+                else "LIVE"
+            )
+            health_label = f"{mode.label.upper()} · {latency}"
+        else:
+            health_label = f"{mode.label.upper()} · DEGRADED"
+        self.query_one("#chip-health", Static).update(
+            f"[green]● {health_label}[/green]"
         )

@@ -2,7 +2,7 @@
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal
-from textual.widgets import Button, Input, Static
+from textual.widgets import Input, Static
 
 
 class QueryBar(Horizontal):
@@ -12,7 +12,6 @@ class QueryBar(Horizontal):
             id="query-input",
             placeholder="Filename or a better title search…",
         )
-        yield Button("Search", id="query-submit", variant="primary")
         yield Static("", id="query-meta")
 
     def refresh_from_state(self, app) -> None:
@@ -22,5 +21,7 @@ class QueryBar(Horizontal):
         count = len(app.candidates)
         suffix = "" if count == 1 else "s"
         self.query_one("#query-meta", Static).update(
-            "Searching…" if app.searching else f"{count} result{suffix}"
+            "[green]● SEARCHING[/green]"
+            if app.searching
+            else f"{count} RESULT{suffix.upper()}"
         )
