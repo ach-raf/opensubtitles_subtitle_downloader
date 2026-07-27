@@ -1,3 +1,4 @@
+.ruff_cache
 __pycache__/
 .vscode/
 venv/
@@ -194,3 +195,5 @@ docs/*
 !docs/superpowers/
 !docs/tui-redesign/
 .superpowers/
+.hallmark/
+design.md
