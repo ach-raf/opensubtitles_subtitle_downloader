@@ -131,9 +131,20 @@ class OpenSubtitles:
 
         results = []
         request_failed = False
-        for media_name in dict.fromkeys(queries):
+        if media_hash:
             found = self.search(
                 media_hash=media_hash,
+                media_name="",
+                languages=language,
+            )
+            if found is None:
+                request_failed = True
+            else:
+                results.extend(found)
+
+        for media_name in dict.fromkeys(queries):
+            found = self.search(
+                media_hash="",
                 media_name=media_name,
                 languages=language,
             )
@@ -141,8 +152,12 @@ class OpenSubtitles:
                 request_failed = True
                 continue
             results.extend(found)
+
+        unique_results = {}
+        for row in results:
+            unique_results.setdefault(row["id"], row)
         return (
-            list({row["id"]: row for row in results}.values()),
+            list(unique_results.values()),
             request_failed,
         )
 

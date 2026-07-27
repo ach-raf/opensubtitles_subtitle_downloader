@@ -94,7 +94,7 @@ def test_missing_provider_id_gets_stable_source_scoped_fingerprint():
     assert first.candidates[0].key.startswith("opensubtitles:fingerprint-")
 
 
-def test_opensubtitles_candidates_restore_legacy_cascading_search(tmp_path):
+def test_opensubtitles_candidates_add_hash_and_filename_results(tmp_path):
     media = tmp_path / "Dune - Prophecy (2024) - S01E01.mkv"
     media.touch()
     client = object.__new__(OpenSubtitles)
@@ -112,14 +112,21 @@ def test_opensubtitles_candidates_restore_legacy_cascading_search(tmp_path):
 
     def search(*, media_hash, media_name, languages):
         calls.append((media_hash, media_name, languages))
+        is_hash_search = bool(media_hash)
         return [
             {
                 "id": f"id-{len(calls)}",
-                "attributes": {"release": media_name},
+                "attributes": {
+                    "release": media_name or "hash release",
+                    "moviehash_match": is_hash_search,
+                },
             },
             {
                 "id": "shared",
-                "attributes": {"release": "duplicate"},
+                "attributes": {
+                    "release": "duplicate",
+                    "moviehash_match": is_hash_search,
+                },
             },
         ]
 
@@ -127,11 +134,14 @@ def test_opensubtitles_candidates_restore_legacy_cascading_search(tmp_path):
 
     results = client.search_candidates(media, "en", media.stem)
 
-    assert [call[1] for call in calls] == [
+    assert calls[0] == ("movie-hash", "", "en")
+    assert [call[1] for call in calls[1:]] == [
         media.stem,
         "Dune - Prophecy (2024)",
         "Dune Prophecy S01E01",
         "Dune.Prophecy.1x01",
     ]
-    assert all(call[0] == "movie-hash" for call in calls)
-    assert len(results) == 5
+    assert all(call[0] == "" for call in calls[1:])
+    assert len(results) == 6
+    shared = next(row for row in results if row["id"] == "shared")
+    assert shared["attributes"]["moviehash_match"] is True
