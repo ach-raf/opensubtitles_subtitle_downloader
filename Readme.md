@@ -1,435 +1,298 @@
-# Opensubtitles.com Subtitle Downloader
+# Subtitle Downloader
 
-🎬 A powerful Python tool for automating subtitle downloads and management from multiple sources.
+A Python application for finding, comparing, and downloading subtitles from
+[OpenSubtitles](https://www.opensubtitles.com/),
+[SubDL](https://subdl.com/), and [SubSource](https://subsource.net/).
+It accepts individual video files or folders, opens a keyboard-driven terminal
+interface by default, and can clean, normalize, and synchronize downloaded
+subtitles.
 
-## ✨ Key Features
+![Subtitle Downloader terminal interface](screenshots/command-deck-wide.png)
 
-- 🔍 **Multi-Source Support**
-  - OpenSubtitles.com integration
-  - SubDL.com integration
-  - Automatic source selection
-- 🧹 **Smart Processing**
-  - Automatic subtitle cleaning (removes ads)
-  - Audio synchronization using ffsubsync
-  - UTF-8 encoding support
-- 🎯 **Flexible Usage**
-  - Single video file processing
-  - Bulk folder processing
-  - Interactive or automated mode
-  - Multiple language support
+## What it does
 
-## 🚀 Quick Start
+- Searches one provider or merges results from all available providers.
+- Combines OpenSubtitles hash and filename matches.
+- Filters by language, hearing-impaired status, and AI translation status.
+- Handles individual videos, multiple paths, and folders.
+- Downloads the selected subtitle beside its video.
+- Converts subtitle text to UTF-8 when configured.
+- Removes known advertising lines from supported subtitle formats.
+- Synchronizes subtitles to the video's audio with
+  [ffsubsync](https://github.com/smacke/ffsubsync).
+- Includes a full-screen Textual interface and the original numbered-prompt
+  command-line interface.
 
-For the fastest way to get started:
+## Requirements
 
-```bash
-# Install UV and clone repository
-pip install uv  # Windows
-# or
-curl -LsSf https://astral.sh/uv/install.sh | sh  # Linux/MacOS
+- Python 3.10 or newer
+- An API key for at least one subtitle provider
+- `ffmpeg` if you want audio synchronization
+- Git if you are cloning the repository
 
-git clone https://github.com/ach-raf/opensubtitles_subtitle_downloader.git && cd opensubtitles_subtitle_downloader
+## Installation
 
-# Setup and run
-uv venv && uv pip install -r requirements.txt  # Creates .venv folder
-cp config.yaml.sample config.yaml  # Edit this file with your API keys
-python download_subs.py path/to/your/movie.mkv
-```
-
-For detailed installation instructions, alternative methods, and configuration options, see the [Installation](#-installation) section below.
-
-## 🖥️ TUI mode (default)
-
-`download_subs.py` opens a full-screen **Textual TUI** — a keyboard-first "command deck" — by default. One screen shows results, and the chrome itself is the control surface: change language, switch engine, and pick post-download actions **without quitting**.
+Clone the repository and enter its directory:
 
 ```bash
-python download_subs.py movie.mkv            # opens the TUI
-python download_subs.py movie.mkv --no-tui   # force the legacy numbered-prompt CLI
+git clone https://github.com/ach-raf/opensubtitles_subtitle_downloader.git
+cd opensubtitles_subtitle_downloader
 ```
 
-Set `general.no_tui: true` in `config.yaml` to make the legacy CLI the default (handy for headless / Send-To batch use); `--tui` overrides it for a single run.
+Using `uv`:
 
-### Keybindings
-
-| Key | Action |
-|---|---|
-| `j` / `k` or `↑` / `↓` | Move cursor in the results table |
-| `↵` | Download the highlighted row |
-| `/` | Focus the query / filter input |
-| `L` | Open the language popover (native names; scope-confirm if a batch is in flight) |
-| `B` | Open the engine switcher (OpenSubtitles / SubDL / SubSource / Auto, with health + latency) |
-| `m` | Toggle merge mode (fan out to all engines, dedupe, re-score) |
-| `r` | Re-probe engine health + latency |
-| `4` | Open Config (live toggles; `ctrl+s` writes back to `config.yaml`) |
-| `ctrl+k` | Command palette — fuzzy-search every action |
-| `q` | Quit |
-
-Post-download toast keys (`↵` `c` `s` `d` `A` `esc`) are local to the toast. The toast auto-picks your default (Clean + Sync / Clean) after 5 seconds **only** when `sync_audio_to_subs` is `always` or `never`; when it's `ask`, the toast waits for a keypress.
-
-The legacy numbered-prompt CLI (`SubtitleDownloader`) is preserved behind `--no-tui` and is unchanged — existing scripts and `Send To` batch files keep working.
-
-## 📥 Installation
-
-### Prerequisites
-
-- Python 3.7 or higher
-- `uv` package manager (recommended) or pip
-- Git (optional, for cloning)
-
-### Step-by-Step Installation
-
-1. **Install UV Package Manager** (Recommended)
-
-   ```bash
-   # On Windows (PowerShell)
-   pip install uv
-
-   # On Linux/MacOS
-   curl -LsSf https://astral.sh/uv/install.sh | sh
-   ```
-
-2. **Get the Code**
-
-   ```bash
-   # Option 1: Clone with git
-   git clone https://github.com/ach-raf/opensubtitles_subtitle_downloader.git
-   cd opensubtitles_subtitle_downloader
-
-   # Option 2: Download ZIP
-   # Download and extract the ZIP file from the GitHub repository
-   ```
-
-3. **Set Up Python Environment**
-
-   ```bash
-   # Create and activate virtual environment using uv
-   uv venv
-
-   # On Windows:
-   .venv\Scripts\activate
-   # On Linux/Mac:
-   source .venv/bin/activate
-
-   # Install dependencies (much faster with uv)
-   uv pip install -r requirements.txt
-   ```
-
-   Alternative using traditional pip:
-
-   ```bash
-   # Create virtual environment
-   python -m venv venv
-
-   # Activate virtual environment
-   # On Windows:
-   .\venv\Scripts\activate
-   # On Linux/Mac:
-   source venv/bin/activate
-
-   # Install dependencies
-   pip install -r requirements.txt
-   ```
-
-> 💡 **Why UV?**
->
-> - Up to 10-100x faster than pip
-> - Better dependency resolution
-> - Built-in virtual environment management
-> - Reproducible installations
-> - Compatible with all existing Python packages
-
-## 🔑 Getting API Keys
-
-1. **For OpenSubtitles.com:**
-
-   - Register at https://www.opensubtitles.com/en/consumers
-   - Create an API consumer account
-   - Get your API key from the dashboard
-
-2. **For SubDL.com:**
-   - Create an account at https://subdl.com
-   - Find your API key under Account Settings
-
-## ⚙️ Configuration
-
-Rename `config.yaml.sample` to `config.yaml` and configure the following sections:
-
-### General Settings
-
-```yaml
-general:
-  preferred_backend: subdl # Options: opensubtitles, subdl, subsource, auto, ask
-  skip_interactive_menu: false # Options: true, false
-  sync_audio_to_subs: true # Options: true, false, ask
-  auto_selection: false # Options: true, false
-  opt_force_utf8: true # Options: true, false
-  no_tui: false # Options: true, false. false (default) = TUI; true = legacy numbered CLI
+```bash
+uv venv
+uv pip install -r requirements.txt
 ```
 
-### OpenSubtitles Configuration
+Or using the standard library:
 
-```yaml
-opensubtitles:
-  username: YOUR_USERNAME
-  password: YOUR_PASSWORD
-  api_key: YOUR_API_KEY
-  user_agent: YOUR_USER_AGENT
-  languages:
-    English: en
-    Arabic: ar
-    French: fr
-    Japanese: ja
+```bash
+python -m venv .venv
 ```
 
-### SubDL Configuration
+Activate the environment:
 
-```yaml
-subdl:
-  api_key: YOUR_SUBDL_API_KEY
-  languages:
-    English: en
-    Arabic: ar
-    French: fr
-    Japanese: ja
+```powershell
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
 ```
 
-### Subtitle Cleaning Configuration
-
-```yaml
-ads:
-  separator: ","
-  file_path: "" # Example: "C:\\clean_subtitles\\ads.txt"
+```bash
+# Linux and macOS
+source .venv/bin/activate
 ```
 
-### Configuration Examples
+Then install the dependencies:
 
-#### Automated Mode
-
-```yaml
-general:
-  preferred_backend: auto
-  skip_interactive_menu: true
-  sync_audio_to_subs: true
-  auto_selection: true
-  opt_force_utf8: true
-
-opensubtitles:
-  api_key: your_api_key_here
-  languages:
-    English: en
+```bash
+python -m pip install -r requirements.txt
 ```
 
-#### Interactive Mode
+Copy the sample configuration:
+
+```powershell
+# Windows PowerShell
+Copy-Item config.yaml.sample config.yaml
+```
+
+```bash
+# Linux and macOS
+cp config.yaml.sample config.yaml
+```
+
+Open `config.yaml` and replace the placeholder credentials for the providers
+you intend to use.
+
+## Provider credentials
+
+You only need to configure the providers you use.
+
+### OpenSubtitles
+
+Create an API consumer at the
+[OpenSubtitles API page](https://www.opensubtitles.com/en/consumers). Add the
+account username, password, API key, and user agent to the `opensubtitles`
+section of `config.yaml`.
+
+### SubDL
+
+Create or copy an API key from your [SubDL account](https://subdl.com/) and add
+it to the `subdl` section.
+
+### SubSource
+
+Copy the `sk_...` API key from your [SubSource](https://subsource.net/) profile
+and add it to the `subsource` section.
+
+## Configuration
+
+`config.yaml.sample` is the best starting point. A shortened example, including
+the TUI's saved merge setting:
 
 ```yaml
 general:
   preferred_backend: ask
+  merge_results: false
   skip_interactive_menu: false
   sync_audio_to_subs: ask
+  auto_selection: false
+  opt_force_utf8: true
+  no_tui: false
+  hearing_impaired: include
+  show_ai_translated: true
 
 opensubtitles:
-  api_key: your_api_key_here
+  username: opensubtitles_username
+  password: opensubtitles_password
+  api_key: opensubtitles_api_key
+  user_agent: opensubtitles_user_agent
   languages:
     English: en
-    Spanish: es
-    French: fr
-    German: de
+    Arabic: ar
+
+subdl:
+  api_key: subdl_api_key
+  languages:
+    English: en
+    Arabic: ar
+
+subsource:
+  api_key: subsource_api_key
+  languages:
+    English: en
+    Arabic: ar
+
+cleaning_subtitles:
+  enabled: true
+  ads:
+    separator: ","
+    file_path: ""
 ```
 
-## 📝 Usage
+Important settings:
 
-### Basic Usage
+| Setting | Values | Meaning |
+|---|---|---|
+| `preferred_backend` | `opensubtitles`, `subdl`, `subsource`, `auto`, `ask` | Selects the initial provider behavior. |
+| `merge_results` | `true`, `false` | Searches all configured providers and merges duplicate results. |
+| `sync_audio_to_subs` | `true`, `false`, `ask` | Always, never, or interactively synchronize after downloading. |
+| `auto_selection` | `true`, `false` | Automatically chooses a result instead of waiting for a selection. |
+| `opt_force_utf8` | `true`, `false` | Normalizes downloaded subtitle text to UTF-8. |
+| `no_tui` | `true`, `false` | Uses the legacy numbered CLI by default when set to `true`. |
+| `hearing_impaired` | `include`, `exclude`, `only` | Controls hearing-impaired subtitle results. |
+| `show_ai_translated` | `true`, `false` | Includes or hides subtitles marked as AI translated. |
 
-#### Single file
+Each provider has its own `languages` mapping. The display name is shown in the
+interface; the value is the provider's language code.
 
-To download subtitles for a single video file:
+To remove additional advertising lines, point
+`cleaning_subtitles.ads.file_path` to a text file containing entries separated
+by `cleaning_subtitles.ads.separator`. When no path is set, the bundled list is
+used.
+
+## Usage
+
+Open the TUI for one video:
 
 ```bash
-python download_subs.py <path/to/video.mkv>
+python download_subs.py "path/to/movie.mkv"
 ```
 
-#### Multiple files
-
-To download subtitles for multiple video files:
+Pass several files or folders:
 
 ```bash
-python download_subs.py <path/to/video1.mp4> <path/to/video2.mkv>
+python download_subs.py "path/to/movie.mkv" "path/to/show/season 01"
 ```
 
-#### Folder
-
-To download subtitles for all video files in a folder:
+Start the TUI with a language and provider selected:
 
 ```bash
-python download_subs.py <path/to/folder>
+python download_subs.py --lang en --backend subdl "path/to/movie.mkv"
 ```
 
-It will search the folder for video files and download subtitles.
+`--lang` and `--backend` seed the TUI. They do not override choices in the
+legacy numbered CLI.
 
-#### Multiple folders
-
-To download subtitles for multiple folders:
+Use the legacy interface for a single run:
 
 ```bash
-python download_subs.py <path/to/folder1> <path/to/folder2>
+python download_subs.py --no-tui "path/to/movie.mkv"
 ```
 
-It will look in both folders for video files and download subtitles.
-
-### Advanced Usage
+Force the TUI when `general.no_tui` is enabled:
 
 ```bash
-# Download with specific language preference
-python download_subs.py --lang eng "Movie.mkv"
-
-# Process an entire season of a TV show
-python download_subs.py "/TV Shows/Breaking Bad/Season 1"
-
-# Bulk process with specific file types
-python download_subs.py "/movies/*.mkv"
+python download_subs.py --tui "path/to/movie.mkv"
 ```
 
-### System-wide Installation (Optional)
+See the complete command-line help:
 
-#### For Windows (Send To Menu)
+```bash
+python download_subs.py --help
+```
 
-1. Open the "Send To" directory:
+## TUI controls
 
-   - Press `Win + R`
-   - Type `shell:sendto` and press Enter
+The interface opens on the Search view. The most useful keys are:
 
-2. Create `Download Subtitles.bat`:
-   ```batch
-   @echo off
-   cls
-   cmd /k "cd /d PATH_TO_PROJECT_FOLDER\venv\Scripts & activate & cd /d PATH_TO_PROJECT_FOLDER & python download_subs.py %*"
-   pause
-   ```
-   Replace `PATH_TO_PROJECT_FOLDER` with your actual project path (e.g., `D:\PycharmProjects\new_opensubtitles`)
+| Key | Action |
+|---|---|
+| `j`, `k` or arrow keys | Move through results |
+| `Enter` | Download the selected result |
+| `/` | Focus the query field |
+| `L` | Select a language |
+| `B` | Select a provider, automatic fallback, or all-provider search |
+| `m` | Toggle merged provider results |
+| `r` | Check provider availability and latency again |
+| `p` | Preview the selected subtitle |
+| `y` | Copy the selected result URL |
+| `1`–`4` | Open Search, Queue, History, or Config |
+| `Ctrl+K` | Open the command palette |
+| `Ctrl+S` | Save configuration changes |
+| `?` | Open the built-in key reference |
+| `q` | Quit |
 
-After setup, you can right-click any video file or folder and select "Send To" → "Download Subtitles".
+The language and provider selectors also accept lowercase `l` and `b`.
 
-#### For Linux/MacOS:
+When `sync_audio_to_subs` is `ask`, the application asks whether to synchronize
+after a successful download. When it is `true` or `false`, that choice is
+applied without prompting. Subtitle cleaning follows
+`cleaning_subtitles.enabled`.
 
-1. Add to your `.bashrc` or `.bash_profile`:
+## Windows Send To
 
-   ```bash
-   export PATH="$PATH:$HOME/bin"
-   ```
+The included `1_download_subs.bat` is configured for this repository's original
+local path. Edit its paths before using it elsewhere.
 
-2. Create `$HOME/bin/download_subs.sh`:
+To add it to the Windows Send To menu:
 
-   ```bash
-   #!/bin/bash
+1. Press `Win+R`.
+2. Enter `shell:sendto`.
+3. Put a shortcut to the edited batch file in that folder.
 
-   # Function to activate virtualenv
-   activate_venv() {
-     source /path/to/project/venv/bin/activate  # Change this path
-   }
+You can then right-click a video or folder and send it to the downloader. Set
+`general.no_tui: true` if you prefer the numbered interface for this workflow.
 
-   deactivate_venv() {
-     deactivate
-   }
+## Troubleshooting
 
-   # Function to run python script
-   run_script() {
-     python "/path/to/project/download_subs.py" "${@:1}"  # Change this path
-   }
+### A provider returns no results
 
-   # Activate virtualenv
-   activate_venv
+Check that its API key and language mapping are present in `config.yaml`. In
+the TUI, press `r` to check provider availability, then try a different
+provider or merged search.
 
-   # Run script passing all arguments
-   run_script "${@:1}"
+### Synchronization fails
 
-   # Deactivate virtualenv
-   deactivate_venv
-   ```
+Confirm that `ffmpeg` is installed and available on `PATH`. Synchronization is
+optional; set `sync_audio_to_subs: false` to keep the downloaded timing.
 
-3. Make it executable:
-   ```bash
-   chmod +x $HOME/bin/download_subs.sh
-   ```
+### SubSource cannot extract a RAR archive
 
-After setup, you can use `download_subs.sh` from anywhere in the terminal.
+The requirements include Python RAR support. A `7z` executable on `PATH` is the
+fallback when that package is unavailable.
 
-## ❓ Troubleshooting
+### The TUI cannot run in the current terminal
 
-### Common Issues
+Use `--no-tui` or set `general.no_tui: true` in `config.yaml`.
 
-1. **API Key Issues**
+### An existing subtitle is not replaced
 
-   - Ensure your API keys are correctly entered in `config.yaml`
-   - Check if you have reached the daily API limit
-   - Verify your account status on the respective platforms
+The application asks before overwriting an existing subtitle. Confirm the
+replacement when prompted.
 
-2. **Subtitle Sync Problems**
+Report reproducible problems in the
+[GitHub issue tracker](https://github.com/ach-raf/opensubtitles_subtitle_downloader/issues).
 
-   - Make sure ffmpeg is properly installed
-   - Check if the video file is corrupted
-   - Try with a different subtitle file
-
-3. **Encoding Issues**
-   - Enable `opt_force_utf8: true` in config
-   - Try manually converting subtitle file encoding
-   - Check if the subtitle file is corrupted
-
-### Error Messages
-
-- `API rate limit exceeded`: Wait for a few minutes and try again
-- `No subtitles found`: Try with different search terms or language
-- `Failed to sync subtitles`: Check video file integrity and ffmpeg installation
-
-For more help, please [open an issue](https://github.com/ach-raf/opensubtitles_subtitle_downloader/issues) on GitHub.
-
-## 🔗 Credits
+## Services and libraries
 
 - [OpenSubtitles API](https://opensubtitles.stoplight.io/docs/opensubtitles-api/e3750fd63a100-getting-started)
-- [ffsubsync](https://github.com/smacke/ffsubsync) for subtitle synchronization
-- [UV](https://github.com/astral-sh/uv) for fast Python package management
+- [SubDL](https://subdl.com/)
+- [SubSource](https://subsource.net/)
+- [Textual](https://textual.textualize.io/)
+- [ffsubsync](https://github.com/smacke/ffsubsync)
 
-## 🤝 Contributing
+## License
 
-Contributions are welcome! Here's how you can help:
-
-1. **Report Bugs**
-
-   - Open an issue with a clear title and description
-   - Add `bug` label to the issue
-   - Include steps to reproduce the bug
-
-2. **Suggest Enhancements**
-
-   - Open an issue with your suggestion
-   - Add `enhancement` label to the issue
-   - Explain why this enhancement would be useful
-
-3. **Submit Pull Requests**
-   - Fork the repository
-   - Create a new branch for your feature
-   - Add your changes
-   - Submit a pull request with a clear description
-
-### Development Setup
-
-```bash
-# Clone your fork
-git clone https://github.com/YOUR_USERNAME/opensubtitles_subtitle_downloader.git
-
-# Create development branch
-git checkout -b feature/your-feature-name
-
-# Make your changes
-# Test your changes manually
-# Ensure documentation is updated
-
-# Submit PR when ready
-```
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## ⭐ Show Your Support
-
-If you find this project useful, please consider giving it a star on GitHub!
+This project is available under the [MIT License](LICENSE).

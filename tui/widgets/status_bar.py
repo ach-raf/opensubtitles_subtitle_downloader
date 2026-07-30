@@ -13,7 +13,7 @@ class StatusBar(Horizontal):
         yield Static("", id="status-progress")
         yield Static("", id="status-settings")
         yield Static(
-            "L lang · B engine · K palette · q quit",
+            "L lang · E engine · K palette · q quit",
             id="status-hints",
         )
 
@@ -24,7 +24,11 @@ class StatusBar(Horizontal):
         elif app.searching:
             message.update("[green]● Searching providers…[/green]")
         elif app.downloading:
-            message.update("[green]● Downloading…[/green]")
+            active = app.state.active_item
+            if active and active.status is QueueStatus.POST_PROCESSING:
+                message.update("[green]● Syncing subtitles…[/green]")
+            else:
+                message.update("[green]● Downloading…[/green]")
         else:
             message.update("[green]● IDLE[/green]")
         done = sum(item.status is QueueStatus.DONE for item in app.state.queue)
@@ -46,4 +50,4 @@ class StatusBar(Horizontal):
         if app.state.active_view == "config":
             hints.update("Tab move · Space toggle · Ctrl+S save · q quit")
         else:
-            hints.update("L lang · B engine · K palette · q quit")
+            hints.update("# jump · F1–F4 tabs · L lang · E engine · q quit")

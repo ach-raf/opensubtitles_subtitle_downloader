@@ -27,7 +27,7 @@ def default_actions() -> list[Action]:
             f"view.{view}",
             f"Open {view.title()} view",
             "navigation",
-            str(index),
+            f"F{index}",
             lambda app, view=view: app.action_show_view(view),
         )
         for index, view in enumerate(
@@ -46,7 +46,7 @@ def default_actions() -> list[Action]:
             "engine.open",
             "Change subtitle engine",
             "search",
-            "b",
+            "e",
             lambda app: app.action_open_engine(),
         ),
         Action(

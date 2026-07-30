@@ -32,7 +32,7 @@ class EngineSwitcher(ModalScreen[tuple[EngineMode, bool] | None]):
     }
     EngineSwitcher .overlay-help {
         color: #8493a8;
-        height: 2;
+        height: 3;
     }
     EngineSwitcher OptionList {
         height: 9;
@@ -45,6 +45,10 @@ class EngineSwitcher(ModalScreen[tuple[EngineMode, bool] | None]):
         Binding("escape", "cancel", "Cancel", show=False),
         Binding("enter", "select", "Select", show=False),
     ]
+    HELP_TEXT = (
+        "Choose a provider or search mode.\n"
+        "Auto: first match wins  ·  All providers: combined results"
+    )
 
     def __init__(
         self,
@@ -70,8 +74,7 @@ class EngineSwitcher(ModalScreen[tuple[EngineMode, bool] | None]):
         with Vertical():
             yield Static("Subtitle engine", classes="overlay-title")
             yield Static(
-                "Auto stops at the first source with matches. All providers "
-                "combines every configured source.",
+                self.HELP_TEXT,
                 classes="overlay-help",
             )
             yield OptionList(
@@ -100,19 +103,16 @@ class EngineSwitcher(ModalScreen[tuple[EngineMode, bool] | None]):
 
     def _label(self, mode: EngineMode, merge: bool = False) -> str:
         if merge:
-            return "All providers  ·  concurrent combined results"
+            return "All providers  ·  search every configured source"
         if mode is EngineMode.AUTO:
-            return (
-                "Auto fallback  ·  stops after first source with matches  ·  "
-                "SubSource → OpenSubtitles → SubDL"
-            )
+            return "Auto fallback  ·  SubSource → OpenSubtitles → SubDL"
         provider = mode.provider
         if provider not in self.configured:
             return f"{mode.label}  ·  credentials missing"
         health = self.health.get(provider)
         if health is None:
-            status = "not checked"
-        elif health.reachable:
+            return mode.label
+        if health.reachable:
             latency = (
                 f" · {health.latency_ms} ms" if health.latency_ms is not None else ""
             )

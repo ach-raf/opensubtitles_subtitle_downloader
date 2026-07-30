@@ -52,7 +52,7 @@ def test_config_is_a_real_view_with_all_supported_controls(tmp_path):
 
     async def run():
         async with app.run_test() as pilot:
-            await pilot.press("4")
+            await pilot.press("f4")
             await pilot.pause()
             assert app.state.active_view == "config"
             view = app.query_one(ConfigView)
@@ -83,7 +83,7 @@ def test_config_keeps_a_usable_scroll_viewport_at_standard_terminal_size(tmp_pat
 
     async def run():
         async with app.run_test(size=(80, 24)) as pilot:
-            await pilot.press("4")
+            await pilot.press("f4")
             await pilot.pause()
 
             scroll = app.query_one("#config-scroll")
@@ -105,7 +105,7 @@ def test_config_save_round_trips_every_edited_field_atomically(tmp_path):
 
     async def run():
         async with app.run_test() as pilot:
-            await pilot.press("4")
+            await pilot.press("f4")
             await pilot.pause()
             app._engine_chosen((EngineMode.AUTO, True))
             app.query_one("#config-sync", Select).value = "always"

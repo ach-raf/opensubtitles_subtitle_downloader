@@ -6,17 +6,17 @@
 $canvas: #070b10;
 $surface: #0d141b;
 $surface-raised: #121b24;
-$line: #2a3745;
+$line: #34485b;
 $ink: #e9eef5;
-$muted: #78889a;
+$muted: #8fa0b3;
 $blue: #72a8ff;
 $green: #69e49d;
 $amber: #f0ba62;
 $red: #ef7777;
 $dark-ink: #07110d;
 $rule-soft: #1c2732;
-$selection: #183126;
-$selection-soft: #14251f;
+$selection: #2b5273;
+$selection-soft: #1b3448;
 $disabled: #4d5966;
 
 Screen {
@@ -516,9 +516,13 @@ ResultsTable {
 }
 
 DataTable > .datatable--header {
-    background: $surface;
+    background: $surface-raised;
     color: $muted;
-    text-style: none;
+    text-style: bold;
+}
+
+DataTable > .datatable--even-row {
+    background: #101922;
 }
 
 DataTable > .datatable--cursor {
@@ -591,9 +595,15 @@ DetailPane {
 }
 
 #detail-actions Button.-primary {
+    color: $green;
+    background: $selection-soft;
+    border: solid $green;
+}
+
+#detail-actions Button.-primary:hover,
+#detail-actions Button.-primary:focus {
     color: $dark-ink;
     background: $green;
-    border: solid $green;
 }
 
 /* Persistent operational rail */

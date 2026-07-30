@@ -57,6 +57,17 @@ def test_language_popover_batch_requires_explicit_scope():
     assert _drive_screen(screen, ["down", "enter", "a"]) == ("ar", "all")
 
 
+def test_language_popover_enter_confirms_all_remaining_files():
+    screen = LanguagePopover(
+        languages={"en": "English", "ar": "العربية"},
+        current="en",
+        needs_scope_confirm=True,
+        remaining_files=["a.mkv", "b.mkv"],
+    )
+
+    assert _drive_screen(screen, ["down", "enter", "enter"]) == ("ar", "all")
+
+
 def test_engine_switcher_reopens_on_current_all_providers_choice():
     screen = EngineSwitcher(
         current=EngineMode.OPENSUBTITLES,
@@ -103,17 +114,35 @@ def test_engine_switcher_all_providers_is_a_first_class_choice():
     ) == (EngineMode.AUTO, True)
 
 
-def test_engine_switcher_explains_auto_stops_at_first_match():
+def test_engine_switcher_explains_modes_without_repeating_itself():
     screen = EngineSwitcher(
         current=EngineMode.AUTO,
         health={},
         merge_mode=False,
     )
 
-    assert "stops after first source with matches" in screen._label(
-        EngineMode.AUTO,
-        False,
+    assert screen.HELP_TEXT == (
+        "Choose a provider or search mode.\n"
+        "Auto: first match wins  ·  All providers: combined results"
     )
+    assert screen._label(EngineMode.AUTO, False) == (
+        "Auto fallback  ·  SubSource → OpenSubtitles → SubDL"
+    )
+    assert screen._label(EngineMode.AUTO, True) == (
+        "All providers  ·  search every configured source"
+    )
+
+
+def test_engine_switcher_omits_repeated_unknown_health_status():
+    screen = EngineSwitcher(
+        current=EngineMode.OPENSUBTITLES,
+        health={},
+        merge_mode=False,
+    )
+
+    assert screen._label(EngineMode.OPENSUBTITLES) == "OpenSubtitles"
+    assert screen._label(EngineMode.SUBDL) == "SubDL"
+    assert screen._label(EngineMode.SUBSOURCE) == "SubSource"
 
 
 def test_palette_filters_and_returns_action():
@@ -124,7 +153,12 @@ def test_palette_filters_and_returns_action():
 
 
 def test_keymap_actions_are_callable_and_searchable():
-    assert all(callable(action.run) for action in default_actions())
+    actions = default_actions()
+    assert all(callable(action.run) for action in actions)
+    assert [
+        action.shortcut for action in actions if action.id.startswith("view.")
+    ] == ["F1", "F2", "F3", "F4"]
+    assert Keymap().by_id("engine.open").shortcut == "e"
     assert Keymap().search("engine merge")[0].id == "engine.merge"
 
 

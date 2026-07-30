@@ -44,6 +44,13 @@ class RecordingCleaner:
         return True
 
 
+class StreamingSynchronizer:
+    def sync(self, media_path, subtitle_path, on_output=None):
+        on_output("extracting speech segments...")
+        on_output("...done")
+        return True
+
+
 def test_download_dispatches_to_candidate_provider(tmp_path):
     adapters = {
         Provider.OPENSUBTITLES: RecordingAdapter(Provider.OPENSUBTITLES),
@@ -146,3 +153,27 @@ def test_force_utf8_normalizes_legacy_encoded_subtitle(tmp_path):
 
     assert result.utf8_normalized
     assert subtitle.read_text(encoding="utf-8") == "café"
+
+
+def test_postprocess_forwards_live_sync_output(tmp_path):
+    subtitle = tmp_path / "Movie.en.srt"
+    subtitle.write_text("subtitle", encoding="utf-8")
+    download = DownloadResult(
+        provider=Provider.SUBDL,
+        media_path=tmp_path / "Movie.mkv",
+        subtitle_path=subtitle,
+    )
+    output = []
+
+    result = JobCoordinator(
+        {},
+        synchronizer=StreamingSynchronizer(),
+    ).postprocess(
+        download,
+        clean=False,
+        sync=True,
+        sync_output=output.append,
+    )
+
+    assert result.synced is True
+    assert output == ["extracting speech segments...", "...done"]

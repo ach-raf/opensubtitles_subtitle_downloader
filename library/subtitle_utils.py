@@ -5,6 +5,7 @@ import pickle
 import re
 import struct
 import time
+import unicodedata
 from pathlib import Path
 
 from rich.console import Console
@@ -183,8 +184,12 @@ class SubtitleUtils:
             self.console.print(f"[bold red]Error cleaning subtitles: {e}[/]")
             return False
 
-    def sync_subtitles_strict(self, media_path, subtitle_path):
-        return sync_subtitles.sync_subs_audio(media_path, subtitle_path)
+    def sync_subtitles_strict(self, media_path, subtitle_path, on_output=None):
+        return sync_subtitles.sync_subs_audio(
+            media_path,
+            subtitle_path,
+            on_output=on_output,
+        )
 
     def sync_subtitles(self, media_path, subtitle_path):
         try:
@@ -314,6 +319,214 @@ class SubtitleUtils:
                         continue
 
         return None, None
+
+    @staticmethod
+    def _normalize_match_text(value):
+        text = unicodedata.normalize("NFKC", str(value or ""))
+        text = re.sub(r"[\u2010-\u2015\u2212]", "-", text)
+        text = text.replace("_", " ").replace(".", " ")
+        text = re.sub(r"[^0-9A-Za-z]+", " ", text)
+        return " ".join(text.lower().split())
+
+    @staticmethod
+    def _episode_evidence(media_name, *, allow_bare=False):
+        """Return (season, episode, confidence) without forcing uncertain data."""
+        if not media_name:
+            return None, None, "none"
+
+        text = unicodedata.normalize("NFKC", str(media_name))
+        text = re.sub(r"[\u2010-\u2015\u2212]", "-", text)
+        explicit_patterns = (
+            r"\b[Ss](\d{1,2})[\s._-]*[Ee](?:[Pp])?[\s._-]*(\d{1,3})\b",
+            r"\b(\d{1,2})[xX](\d{1,3})\b",
+            (
+                r"\b[Ss]eason[\s._-]*(\d{1,2})"
+                r"[\s._-]*(?:[Ee]pisode|[Ee]p|[Ee])[\s._-]*(\d{1,3})\b"
+            ),
+        )
+        for pattern in explicit_patterns:
+            match = re.search(pattern, text)
+            if match:
+                return int(match.group(1)), int(match.group(2)), "high"
+
+        labeled = re.search(
+            r"\b(?:episode|ep|round|e)[\s._#-]*(\d{1,3})\b",
+            text,
+            re.IGNORECASE,
+        )
+        if labeled:
+            return None, int(labeled.group(1)), "medium"
+
+        if allow_bare:
+            bare = re.search(
+                r"(?:^|\s+-\s+|\s+)(\d{1,3})"
+                r"(?=\s*(?:end\b|\[[^\]]*\]|\([^)]*\)|$))",
+                text,
+                re.IGNORECASE,
+            )
+            if bare:
+                return None, int(bare.group(1)), "low"
+
+        return None, None, "none"
+
+    @classmethod
+    def _title_hypotheses(cls, media_name, *, allow_bare=False):
+        if not media_name:
+            return []
+
+        text = unicodedata.normalize("NFKC", str(media_name))
+        text = re.sub(r"[\u2010-\u2015\u2212]", "-", text)
+        text = re.sub(r"^\s*(?:\[[^\]]+\]\s*)+", "", text)
+        boundaries = (
+            r"\b[Ss]\d{1,2}[\s._-]*[Ee](?:[Pp])?[\s._-]*\d{1,3}\b",
+            r"\b\d{1,2}[xX]\d{1,3}\b",
+            r"\b[Ss]eason[\s._-]*\d{1,2}\b",
+            r"\b(?:episode|ep|round|e)[\s._#-]*\d{1,3}\b",
+        )
+        prefixes = [
+            text[: match.start()]
+            for pattern in boundaries
+            if (match := re.search(pattern, text, re.IGNORECASE))
+        ]
+        if allow_bare:
+            bare = re.search(
+                r"(?:^|\s+-\s+|\s+)\d{1,3}"
+                r"(?=\s*(?:end\b|\[[^\]]*\]|\([^)]*\)|$))",
+                text,
+                re.IGNORECASE,
+            )
+            if bare:
+                prefixes.append(text[: bare.start()])
+        if not prefixes:
+            prefixes.append(text)
+
+        technical_tokens = {
+            "aac",
+            "ac3",
+            "amzn",
+            "arabic",
+            "atmos",
+            "avc",
+            "bluray",
+            "ddp",
+            "dl",
+            "dts",
+            "dvd",
+            "eac3",
+            "flac",
+            "h264",
+            "h265",
+            "hdtv",
+            "hdrip",
+            "hevc",
+            "netflix",
+            "proper",
+            "remux",
+            "webrip",
+            "web",
+            "webdl",
+            "x264",
+            "x265",
+        }
+        hypotheses = []
+        for prefix in prefixes:
+            normalized = cls._normalize_match_text(prefix)
+            normalized = re.sub(r"\b(?:19|20)\d{2}\b", " ", normalized)
+            tokens = [
+                token
+                for token in normalized.split()
+                if token not in technical_tokens
+                and not re.fullmatch(r"\d{3,4}p", token)
+                and not re.fullmatch(r"\d+bit", token)
+                and not re.fullmatch(r"\d+(?:\.\d+)?ch", token)
+            ]
+            hypothesis = " ".join(tokens).strip()
+            if hypothesis and hypothesis not in hypotheses:
+                hypotheses.append(hypothesis)
+        return hypotheses
+
+    @staticmethod
+    def _informative_title_tokens(title):
+        stopwords = {
+            "a",
+            "an",
+            "and",
+            "at",
+            "for",
+            "from",
+            "in",
+            "of",
+            "on",
+            "the",
+            "to",
+        }
+        return {token for token in title.split() if token not in stopwords}
+
+    @classmethod
+    def _title_match_score(cls, source_name, target_name, *, source_allow_bare=False):
+        source_titles = cls._title_hypotheses(
+            source_name,
+            allow_bare=source_allow_bare,
+        )
+        target_titles = cls._title_hypotheses(target_name)
+        best = 0.0
+        for source_title in source_titles:
+            source_tokens = cls._informative_title_tokens(source_title)
+            if not source_tokens:
+                continue
+            for target_title in target_titles:
+                target_tokens = cls._informative_title_tokens(target_title)
+                if not target_tokens:
+                    continue
+                if source_tokens == target_tokens:
+                    best = max(best, 55.0)
+                    continue
+                if source_tokens <= target_tokens or target_tokens <= source_tokens:
+                    best = max(best, 53.0)
+                    continue
+
+                shared = source_tokens & target_tokens
+                if len(shared) >= 2:
+                    coverage = len(shared) / min(
+                        len(source_tokens),
+                        len(target_tokens),
+                    )
+                    best = max(best, 20.0 + 25.0 * coverage)
+
+                similarity = fuzz.token_set_ratio(
+                    " ".join(sorted(source_tokens)),
+                    " ".join(sorted(target_tokens)),
+                )
+                if similarity >= 90:
+                    best = max(best, 42.0)
+                elif similarity >= 80 and shared:
+                    best = max(best, 30.0)
+        return min(best, 55.0)
+
+    @classmethod
+    def _technical_match_score(cls, source_name, target_name):
+        terms = {
+            "720p",
+            "1080p",
+            "2160p",
+            "4k",
+            "amzn",
+            "bluray",
+            "h264",
+            "h265",
+            "hdtv",
+            "hdrip",
+            "hevc",
+            "netflix",
+            "web",
+            "webdl",
+            "webrip",
+            "x264",
+            "x265",
+        }
+        source_tokens = set(cls._normalize_match_text(source_name).split())
+        target_tokens = set(cls._normalize_match_text(target_name).split())
+        return min(10.0, 2.0 * len(source_tokens & target_tokens & terms))
 
     def get_alternate_names(self, media_name):
         """Generate alternate name formats for the media"""
@@ -465,138 +678,68 @@ class SubtitleUtils:
             return 0
 
     def score_subtitle(self, subtitle_release_name, video_file_name, hash_match=False):
-        """Score subtitle match against video filename"""
+        """Score independent filename evidence without requiring a perfect parse."""
         try:
-            score = 0
-
             if not subtitle_release_name or not video_file_name:
                 return 0
-
-            # Hash match is strongest indicator
             if hash_match:
-                score += 100
+                return 100.0
 
-            # Normalize filenames
-            video_file_clean = re.sub(
-                r"[\-\_\[\]\(\)\{\}\s\.]+", " ", video_file_name
-            ).lower()
-            sub_file_clean = re.sub(
-                r"[\-\_\[\]\(\)\{\}\s\.]+", " ", subtitle_release_name
-            ).lower()
-
-            # Extract series name
-            series_name = re.split(
-                r"s\d{1,2}e\d{1,2}|season|episode|\d{3,4}p|\b\d{4}\b", video_file_clean
-            )[0].strip()
-
-            # Series name match (max 55)
-            if series_name and series_name in sub_file_clean:
-                score += 55
-
-            # Quality term matches (max 45: 9 terms × 5 points)
-            quality_score = 0
-            quality_terms = [
-                "hdtv",
-                "720p",
-                "1080p",
-                "2160p",
-                "4k",
-                "webdl",
-                "webrip",
-                "bluray",
-                "hdrip",
-            ]
-            for term in quality_terms:
-                if term in video_file_clean and term in sub_file_clean:
-                    quality_score += 5
-            score += min(quality_score, 45)
-
-            # Handle implicit season 1
-            implicit_s1_patterns = [
-                r"\.e(\d{1,2})\.",  # .E01.
-                r"\.ep(\d{1,2})\.",  # .EP01.
-                r"episode\.(\d{1,2})",  # episode.01
-            ]
-            video_is_implicit_s1 = any(
-                re.search(pattern, video_file_clean) for pattern in implicit_s1_patterns
+            target_season, target_episode, target_confidence = (
+                self._episode_evidence(video_file_name)
             )
-            sub_is_implicit_s1 = any(
-                re.search(pattern, sub_file_clean) for pattern in implicit_s1_patterns
-            )
-
-            # Word matching (max 30)
-            word_match_score = 0
-            video_file_parts = re.split(r"[.\s_-]", video_file_clean)
-            sub_file_parts = re.split(r"[.\s_-]", sub_file_clean)
-            series_name_parts = video_file_parts[:3]
-
-            for sub_part in sub_file_parts:
-                for file_part in video_file_parts:
-                    if sub_part == file_part:
-                        if file_part in series_name_parts:
-                            word_match_score += 5
-                        else:
-                            word_match_score += 1
-            score += min(word_match_score, 30)
-
-            # Fuzzy matching (max 100)
-            similarity = fuzz.token_sort_ratio(video_file_clean, sub_file_clean)
-            if similarity == 100:
-                score += 100
-            elif similarity > 90:
-                score += 50
-            elif similarity > 70:
-                score += 35
-            elif similarity > 40:
-                score += 10
-
-            # Episode/Season matching
-            season_source, episode_source = self.extract_season_and_episode(
-                video_file_name
-            )
-            season_target, episode_target = self.extract_season_and_episode(
-                subtitle_release_name
-            )
-
-            if video_is_implicit_s1 and sub_is_implicit_s1:
-                season_source = season_target = 1
-
-            # Episode match (50 points)
-            if episode_source and episode_target and episode_source == episode_target:
-                score += 50
-
-            # Season match (25 points)
-            if (
-                season_source
-                and season_target
-                and season_source == season_target
-                or video_is_implicit_s1
-                and sub_is_implicit_s1
-            ):
-                score += 25
-
-            # Quality indicators (max 50: 5 terms × 10 points)
-            quality_indicator_score = 0
-            quality_indicators = ["hdtv", "720p", "1080p", "webdl", "webrip"]
-            for term in quality_indicators:
-                if term in video_file_clean and term in sub_file_clean:
-                    quality_indicator_score += 10
-            score += min(quality_indicator_score, 50)
-
-            # Perfect match bonus (75 points)
-            if (
-                (
-                    (season_source == season_target)
-                    or (video_is_implicit_s1 and sub_is_implicit_s1)
+            allow_bare = target_confidence in {"high", "medium"}
+            source_season, source_episode, source_confidence = (
+                self._episode_evidence(
+                    subtitle_release_name,
+                    allow_bare=allow_bare,
                 )
-                and episode_source
-                and episode_target
-                and episode_source == episode_target
-            ):
-                score += 75
+            )
+            title_score = self._title_match_score(
+                subtitle_release_name,
+                video_file_name,
+                source_allow_bare=allow_bare,
+            )
+            title_plausible = title_score >= 25
+            score = title_score
 
-            normalized_score = self.normalize_score(score)
-            return normalized_score
+            episode_agrees = (
+                source_episode is not None
+                and target_episode is not None
+                and source_episode == target_episode
+            )
+            if episode_agrees:
+                episode_points = {
+                    "high": 20.0,
+                    "medium": 14.0,
+                    "low": 8.0,
+                }.get(source_confidence, 0.0)
+                score += episode_points if title_plausible else min(6.0, episode_points)
+            elif (
+                title_plausible
+                and source_episode is not None
+                and target_episode is not None
+                and source_confidence in {"high", "medium"}
+            ):
+                score -= 15.0
+
+            if source_season is not None and target_season is not None:
+                if source_season == target_season:
+                    score += 10.0 if title_plausible else 3.0
+                elif title_plausible and source_confidence == "high":
+                    score -= 12.0
+
+            if title_plausible and episode_agrees:
+                score += 10.0 if source_confidence != "low" else 6.0
+
+            technical_score = self._technical_match_score(
+                subtitle_release_name,
+                video_file_name,
+            )
+            score += technical_score if title_plausible else min(2.0, technical_score)
+            if not title_plausible:
+                score = min(score, 15.0)
+            return max(0.0, min(100.0, score))
         except Exception as e:
             self.console.print(f"[bold red]Error scoring subtitle: {e}[/]")
             return 0

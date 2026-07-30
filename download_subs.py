@@ -3,14 +3,9 @@ import os
 import sys
 from enum import Enum
 
-import requests
 import yaml
 from rich.console import Console
 from rich.table import Table
-
-import library.OpenSubtitles as OpenSubtitles
-from library.SubDL import SubDL
-from library.SubSource import SubSource
 
 console = Console()
 
@@ -45,7 +40,9 @@ class SubtitleDownloader:
     def _init_opensubtitles(self):
         if self.opensubtitles_client is None:
             try:
-                self.opensubtitles_client = OpenSubtitles.OpenSubtitles(
+                from library.OpenSubtitles import OpenSubtitles
+
+                self.opensubtitles_client = OpenSubtitles(
                     self.config["opensubtitles"]["username"],
                     self.config["opensubtitles"]["password"],
                     self.config["opensubtitles"]["api_key"],
@@ -64,6 +61,8 @@ class SubtitleDownloader:
     def _init_subdl(self):
         if self.subdl_client is None:
             try:
+                from library.SubDL import SubDL
+
                 self.subdl_client = SubDL(
                     self.config["subdl"]["api_key"],
                     sync_audio_to_subs=self.config["general"].get(
@@ -79,6 +78,8 @@ class SubtitleDownloader:
     def _init_subsource(self):
         if self.subsource_client is None:
             try:
+                from library.SubSource import SubSource
+
                 self.subsource_client = SubSource(
                     self.config["subsource"]["api_key"],
                     sync_audio_to_subs=self.config["general"].get(
@@ -127,6 +128,8 @@ class SubtitleDownloader:
             return preferred_backend
 
     def _check_api_availability(self, url, headers=None) -> bool:
+        import requests
+
         try:
             response = requests.get(url, timeout=5, headers=headers)
             return response.status_code == 200

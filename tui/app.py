@@ -8,6 +8,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
+from rich.text import Text
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -20,6 +21,7 @@ from textual.widgets import (
     ContentSwitcher,
     DataTable,
     Input,
+    RichLog,
     Select,
     Static,
     Switch,
@@ -57,6 +59,7 @@ from tui.widgets.topbar import TopBar
 from tui.widgets.views import ConfigView, HistoryView, QueueView, SearchView
 
 MEDIA_EXTENSIONS = {"avi", "m4v", "mkv", "mov", "mp4", "ts", "webm"}
+WIDE_LAYOUT_MIN_WIDTH = 140
 
 
 class ConfirmReplace(ModalScreen[bool]):
@@ -122,6 +125,91 @@ class ConfirmSync(ModalScreen[bool]):
 
     def action_cancel(self) -> None:
         self.dismiss(False)
+
+
+class SyncProgress(ModalScreen[None]):
+    DEFAULT_CSS = """
+    SyncProgress {
+        align: center middle;
+        background: rgba(3, 6, 11, 0.82);
+    }
+    SyncProgress > Vertical {
+        width: 92%;
+        max-width: 140;
+        height: 82%;
+        padding: 1 2;
+        background: #0d141b;
+        border: solid #72a8ff;
+    }
+    #sync-progress-title {
+        height: 2;
+        color: #e9eef5;
+        text-style: bold;
+    }
+    #sync-progress-file {
+        height: 2;
+        color: #8fa0b3;
+    }
+    #sync-progress-log {
+        height: 1fr;
+        background: #070b10;
+        border: solid #34485b;
+        color: #e9eef5;
+        scrollbar-color: #2b5273;
+        scrollbar-background: #0d141b;
+    }
+    #sync-progress-footer {
+        height: 2;
+        padding-top: 1;
+        color: #8fa0b3;
+    }
+    """
+    BINDINGS = [
+        Binding("enter", "close", "Close", show=False, priority=True),
+        Binding("escape", "close", "Close", show=False, priority=True),
+        Binding("q", "close", "Close", show=False, priority=True),
+    ]
+
+    def __init__(self, subtitle_path: Path) -> None:
+        super().__init__()
+        self.subtitle_path = subtitle_path
+        self.complete = False
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static("FFSUBSYNC · LIVE OUTPUT", id="sync-progress-title")
+            yield Static(self.subtitle_path.name, id="sync-progress-file")
+            yield RichLog(
+                id="sync-progress-log",
+                max_lines=4000,
+                wrap=False,
+                markup=False,
+                auto_scroll=True,
+            )
+            yield Static(
+                "Sync is running · this may take several minutes",
+                id="sync-progress-footer",
+            )
+
+    def write_output(self, line: str) -> None:
+        self.query_one("#sync-progress-log", RichLog).write(
+            Text.from_ansi(line),
+        )
+
+    def finish(self, *, succeeded: bool, error: str | None = None) -> None:
+        self.complete = True
+        log = self.query_one("#sync-progress-log", RichLog)
+        if succeeded:
+            log.write(Text("✓ Sync complete", style="bold green"))
+        else:
+            log.write(Text(f"✗ Sync failed · {error}", style="bold red"))
+        self.query_one("#sync-progress-footer", Static).update(
+            "Enter or Esc to close"
+        )
+
+    def action_close(self) -> None:
+        if self.complete:
+            self.dismiss(None)
 
 
 class CandidatePreview(ModalScreen[None]):
@@ -311,12 +399,26 @@ class SubsApp(App):
     TITLE = "subs — command deck"
 
     BINDINGS = [
-        Binding("1", "show_view('search')", "Search", show=False),
-        Binding("2", "show_view('queue')", "Queue", show=False),
-        Binding("3", "show_view('history')", "History", show=False),
-        Binding("4", "show_view('config')", "Config", show=False),
-        Binding("b", "open_engine", "Engine", show=False),
-        Binding("B", "open_engine", "Engine", show=False),
+        Binding("f1", "show_view('search')", "Search", show=False),
+        Binding("f2", "show_view('queue')", "Queue", show=False),
+        Binding("f3", "show_view('history')", "History", show=False),
+        Binding("f4", "show_view('config')", "Config", show=False),
+        Binding(
+            "ctrl+pagedown",
+            "cycle_view(1)",
+            "Next tab",
+            show=False,
+            priority=True,
+        ),
+        Binding(
+            "ctrl+pageup",
+            "cycle_view(-1)",
+            "Previous tab",
+            show=False,
+            priority=True,
+        ),
+        Binding("e", "open_engine", "Engine", show=False),
+        Binding("E", "open_engine", "Engine", show=False),
         Binding("l", "open_language", "Language", show=False),
         Binding("L", "open_language", "Language", show=False),
         Binding("slash", "focus_query", "Query", show=False),
@@ -413,6 +515,8 @@ class SubsApp(App):
         self._rebuild_keymap()
         self.last_search_request: SearchRequest | None = None
         self._pending_download: Candidate | None = None
+        self._sync_progress: SyncProgress | None = None
+        self._exit_when_sync_closes = False
         self.search_generation = 0
         self._language_provider_scope: set[Provider] = set()
         self.config_draft_language = self.state.language
@@ -429,17 +533,21 @@ class SubsApp(App):
     def on_mount(self) -> None:
         active = self.state.active_item
         self.query = active.path.stem if active else ""
-        self._refresh_all()
         if self.media_issues:
             self.notice = (
                 f"{len(self.media_issues)} input"
                 f"{'s' if len(self.media_issues) != 1 else ''} skipped"
             )
         if self.state.needs_engine_setup:
-            self.call_after_refresh(self.action_open_engine)
+            self.action_open_engine()
         elif self.state.needs_language_setup:
-            self.call_after_refresh(self.action_open_language)
-        elif active:
+            self.action_open_language()
+        self._refresh_all()
+        if (
+            active
+            and not self.state.needs_engine_setup
+            and not self.state.needs_language_setup
+        ):
             self.call_after_refresh(self.start_search)
 
     def _overlay_raw_config(self, raw: dict[str, Any]) -> None:
@@ -628,6 +736,11 @@ class SubsApp(App):
             self.query_one(ConfigView).mark_clean()
         self._finish_view_change(view)
 
+    def action_cycle_view(self, direction: int) -> None:
+        views = ("search", "queue", "history", "config")
+        current = views.index(self.state.active_view)
+        self.action_show_view(views[(current + direction) % len(views)])
+
     def _finish_view_change(self, view: str) -> None:
         self.state.active_view = view
         self.query_one("#workspace", ContentSwitcher).current = f"{view}-view"
@@ -775,7 +888,9 @@ class SubsApp(App):
             LanguagePopover(
                 languages=languages,
                 current=current_language,
-                needs_scope_confirm=len(remaining) > 1,
+                needs_scope_confirm=(
+                    len(remaining) > 1 and not self.state.needs_language_setup
+                ),
                 remaining_files=remaining,
             ),
             self._language_chosen,
@@ -795,7 +910,11 @@ class SubsApp(App):
             view.mark_dirty()
             view.refresh_from_state(self)
             return
-        normalized_scope = "remaining" if scope == "all" else scope
+        normalized_scope = (
+            "remaining"
+            if scope == "all" or self.state.needs_language_setup
+            else scope
+        )
         self.state.set_language(code, normalized_scope)
         for provider in self._language_provider_scope:
             provider_config = self.application_config.providers[provider]
@@ -897,12 +1016,20 @@ class SubsApp(App):
                     download,
                 )
                 return
+            sync = sync_policy == "always"
+            if sync:
+                self.call_from_thread(
+                    self._sync_started,
+                    item_key,
+                    download.subtitle_path,
+                )
             postprocess = self.jobs.postprocess(
                 download,
                 force_utf8=self.application_config.general.opt_force_utf8,
                 clean=self.application_config.cleaning.enabled,
-                sync=sync_policy == "always",
+                sync=sync,
                 ads_path=self.application_config.cleaning.ads_file_path,
+                sync_output=self._forward_sync_output if sync else None,
             )
         except Exception as exc:
             self.call_from_thread(
@@ -944,12 +1071,19 @@ class SubsApp(App):
         sync: bool,
     ) -> None:
         try:
+            if sync:
+                self.call_from_thread(
+                    self._sync_started,
+                    item_key,
+                    download.subtitle_path,
+                )
             postprocess = self.jobs.postprocess(
                 download,
                 force_utf8=self.application_config.general.opt_force_utf8,
                 clean=self.application_config.cleaning.enabled,
                 sync=sync,
                 ads_path=self.application_config.cleaning.ads_file_path,
+                sync_output=self._forward_sync_output if sync else None,
             )
         except Exception as exc:
             self.call_from_thread(
@@ -965,6 +1099,32 @@ class SubsApp(App):
             download,
             postprocess,
         )
+
+    def _sync_started(self, item_key: str, subtitle_path: Path) -> None:
+        self.state.begin_postprocess(item_key)
+        progress = SyncProgress(subtitle_path)
+        self._sync_progress = progress
+        self._exit_when_sync_closes = False
+        self.push_screen(
+            progress,
+            lambda _result: self._sync_progress_closed(progress),
+        )
+        self._refresh_all()
+
+    def _sync_progress_closed(self, progress: SyncProgress) -> None:
+        if self._sync_progress is not progress:
+            return
+        self._sync_progress = None
+        if self._exit_when_sync_closes:
+            self._exit_when_sync_closes = False
+            self.exit()
+
+    def _forward_sync_output(self, line: str) -> None:
+        self.call_from_thread(self._show_sync_output, line)
+
+    def _show_sync_output(self, line: str) -> None:
+        if self._sync_progress is not None:
+            self._sync_progress.write_output(line)
 
     def _download_started(self, item_key: str, candidate_key: str) -> None:
         item = next(item for item in self.state.queue if item.key == item_key)
@@ -982,6 +1142,11 @@ class SubsApp(App):
         postprocess,
     ) -> None:
         self.downloading = False
+        if self._sync_progress is not None:
+            self._sync_progress.finish(
+                succeeded=postprocess.synced,
+                error=postprocess.sync_error,
+            )
         if download.conflict_path:
             item = next(item for item in self.state.queue if item.key == item_key)
             item.status = QueueStatus.AWAITING_PICK
@@ -1011,12 +1176,20 @@ class SubsApp(App):
             error=None,
         )
         self.state.mark_complete(item_key, history)
-        self.notice = f"Saved {download.subtitle_path.name}"
+        self.notice = (
+            f"Saved and synced {download.subtitle_path.name}"
+            if postprocess.synced
+            else f"Saved {download.subtitle_path.name}"
+        )
         self.candidates = []
         self._refresh_all()
         if self.state.active_item:
             self.query = self.state.active_item.path.stem
             self.start_search()
+        elif self._sync_progress is not None:
+            self._exit_when_sync_closes = True
+        else:
+            self.exit()
 
     def _replace_decided(
         self,
@@ -1032,6 +1205,8 @@ class SubsApp(App):
 
     def _download_crashed(self, item_key: str, error: str) -> None:
         self.downloading = False
+        if self._sync_progress is not None:
+            self._sync_progress.finish(succeeded=False, error=error)
         self.state.mark_failed(item_key, error)
         self.last_error = error
         self._advance_queue()
@@ -1045,7 +1220,7 @@ class SubsApp(App):
 
     def action_help(self) -> None:
         self.notify(
-            "1–4 views · b engine · l language · / query · "
+            "F1–F4 views · e engine · l language · / query · "
             "j/k move · Enter download · m merge · q quit",
             title="Command deck shortcuts",
             timeout=8,
@@ -1069,10 +1244,11 @@ class SubsApp(App):
     def on_resize(self, event) -> None:
         try:
             width = event.size.width
-            self.query_one("#detail-panel").display = width >= 115
-            self.query_one("#chip-health").display = width >= 120
-            self.query_one("#chip-command").display = width >= 105
-            self.query_one("#status-settings").display = width >= 110
+            wide_layout = width >= WIDE_LAYOUT_MIN_WIDTH
+            self.query_one("#detail-panel").display = wide_layout
+            self.query_one("#chip-health").display = wide_layout
+            self.query_one("#chip-command").display = wide_layout
+            self.query_one("#status-settings").display = wide_layout
             self.query_one("#status-progress").display = width >= 70
             self.query_one("#status-hints").display = width >= 60
         except NoMatches:

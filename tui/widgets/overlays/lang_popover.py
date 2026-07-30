@@ -211,9 +211,9 @@ class LanguagePopover(ModalScreen[LangResult]):
         self.action_select()
 
     def on_key(self, event) -> None:
-        # When scope mode is active, intercept a/c/esc here.
+        # When scope mode is active, intercept enter/a/c/esc here.
         if self._scope_mode:
-            if event.key == "a":
+            if event.key in {"enter", "a"}:
                 self.dismiss((self._selected_code, "all"))
             elif event.key == "c":
                 self.dismiss((self._selected_code, "current"))
@@ -273,7 +273,7 @@ class LanguagePopover(ModalScreen[LangResult]):
             f"[b]Apply[/b] [#4ddb9a]{name}[/] [b]to:[/b]\n\n"
             f"[dim]remaining {len(self.remaining_files)} files:[/dim] "
             f"{preview}{more}\n\n"
-            f"[b][#4ddb9a]a[/][/] all remaining   "
+            f"[b][#4ddb9a]enter/a[/][/] all remaining   "
             f"[b][#4ddb9a]c[/][/] current file only   "
             f"[b]esc[/] cancel",
         )

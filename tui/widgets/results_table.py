@@ -1,14 +1,21 @@
 """Typed subtitle candidate table."""
 
 from rich.text import Text
+from textual import events
 from textual.widgets import DataTable
 
 
 class ResultsTable(DataTable):
     def __init__(self) -> None:
-        super().__init__(id="results-table")
+        super().__init__(
+            id="results-table",
+            cell_padding=0,
+            cursor_background_priority="css",
+            zebra_stripes=True,
+        )
         self.cursor_type = "row"
-        self.cell_padding = 0
+        self._number_buffer = ""
+        self._number_buffer_timer = None
         self._rendered_signature: tuple | None = None
         self._rendered_merge_mode: bool | None = None
 
@@ -38,7 +45,7 @@ class ResultsTable(DataTable):
             self.sync_cursor(app.cursor_index)
             return
         self.clear()
-        for candidate in app.candidates:
+        for index, candidate in enumerate(app.candidates, 1):
             flags = []
             if candidate.hash_match:
                 flags.append("[blue]↓hash[/blue]")
@@ -47,10 +54,11 @@ class ResultsTable(DataTable):
             if candidate.ai_translated:
                 flags.append("[yellow]⚙AI[/yellow]")
             cells = [
+                str(index),
                 candidate.release,
-                f" {candidate.language.upper()}",
-                Text.from_markup(f" {' '.join(flags)}"),
-                f" {_count(candidate.download_count)}",
+                candidate.language.upper(),
+                Text.from_markup(" ".join(flags)),
+                _count(candidate.download_count),
                 _score(candidate.score),
             ]
             if app.merge_mode:
@@ -68,14 +76,35 @@ class ResultsTable(DataTable):
         if self.cursor_row != row:
             self.move_cursor(row=row)
 
+    def on_key(self, event: events.Key) -> None:
+        character = event.character
+        if character is None or not character.isdecimal():
+            return
+        event.stop()
+        self._number_buffer += character
+        if self._number_buffer_timer is not None:
+            self._number_buffer_timer.stop()
+        self._number_buffer_timer = self.set_timer(
+            0.8,
+            self._clear_number_buffer,
+        )
+        result_number = int(self._number_buffer)
+        if 1 <= result_number <= self.row_count:
+            self.move_cursor(row=result_number - 1)
+
+    def _clear_number_buffer(self) -> None:
+        self._number_buffer = ""
+        self._number_buffer_timer = None
+
     def _set_columns(self, merge_mode: bool) -> None:
-        self.add_column("Release", width=66 if merge_mode else 75)
-        self.add_column("L", width=3)
+        self.add_column("#", width=4)
+        self.add_column("Release", width=62 if merge_mode else 71)
+        self.add_column("L", width=2)
         if merge_mode:
             self.add_column("Source", width=9)
         self.add_column("Flags", width=6)
-        self.add_column("D/L", width=6)
-        self.add_column("S", width=3)
+        self.add_column("D/L", width=5)
+        self.add_column("Match", width=5)
         self._rendered_merge_mode = merge_mode
 
 

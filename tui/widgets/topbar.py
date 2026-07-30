@@ -18,7 +18,7 @@ class TopBar(Horizontal):
             1,
         ):
             yield Button(
-                f"{index} {label}",
+                f"F{index} {label}",
                 id=f"tab-{view}",
                 classes="tab",
                 flat=True,
@@ -38,7 +38,7 @@ class TopBar(Horizontal):
             )
         config_dirty = app.query_one("#config-view").dirty
         config_button = self.query_one("#tab-config", Button)
-        config_button.label = "4 Config •" if config_dirty else "4 Config"
+        config_button.label = "F4 Config •" if config_dirty else "F4 Config"
         config_button.set_class(config_dirty, "dirty")
         mode = app.state.engine_mode
         engine_label = (

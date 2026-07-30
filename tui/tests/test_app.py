@@ -1,6 +1,8 @@
 import asyncio
+from pathlib import Path
 
 import pytest
+from textual.color import Color
 from textual.widgets import Button, ContentSwitcher, DataTable, Input, Static
 
 from tui.app import ConfirmConfigExit, ConfirmConfigSave, ConfirmQuit, SubsApp
@@ -81,10 +83,10 @@ def test_all_four_tabs_are_real_views(configured_app):
         async with app.run_test() as pilot:
             await pilot.pause(0.2)
             for key, view in (
-                ("1", "search"),
-                ("2", "queue"),
-                ("3", "history"),
-                ("4", "config"),
+                ("f1", "search"),
+                ("f2", "queue"),
+                ("f3", "history"),
+                ("f4", "config"),
             ):
                 await pilot.press(key)
                 await pilot.pause()
@@ -104,10 +106,10 @@ def test_view_shortcuts_focus_each_primary_workspace(configured_app):
         async with app.run_test() as pilot:
             await pilot.pause(0.3)
             for key, selector in (
-                ("2", "#queue-table"),
-                ("3", "#history-table"),
-                ("4", "#config-engine"),
-                ("1", "#results-table"),
+                ("f2", "#queue-table"),
+                ("f3", "#history-table"),
+                ("f4", "#config-engine"),
+                ("f1", "#results-table"),
             ):
                 await pilot.press(key)
                 await pilot.pause()
@@ -180,7 +182,14 @@ def test_repeated_view_switching_does_not_rebuild_unchanged_tables(
                 table.clear = tracked_clear
 
             for _ in range(8):
-                await pilot.press("2", "down", "3", "1", "down", "up")
+                await pilot.press(
+                    "f2",
+                    "down",
+                    "f3",
+                    "f1",
+                    "down",
+                    "up",
+                )
             await pilot.pause(0.1)
 
             assert clear_counts == [0, 0, 0]
@@ -189,13 +198,13 @@ def test_repeated_view_switching_does_not_rebuild_unchanged_tables(
     asyncio.run(run())
 
 
-def test_lowercase_engine_and_language_shortcuts_open_choices(configured_app):
+def test_obvious_engine_and_language_shortcuts_open_choices(configured_app):
     app, _ = configured_app
 
     async def run():
         async with app.run_test() as pilot:
             await pilot.pause(0.2)
-            await pilot.press("b")
+            await pilot.press("e")
             await pilot.pause()
             assert isinstance(app.screen, EngineSwitcher)
             await pilot.press("escape")
@@ -203,6 +212,78 @@ def test_lowercase_engine_and_language_shortcuts_open_choices(configured_app):
             await pilot.press("l")
             await pilot.pause()
             assert isinstance(app.screen, LanguagePopover)
+
+    asyncio.run(run())
+
+
+def test_interactive_startup_opens_engine_before_refreshing_workspace(tmp_path):
+    media = tmp_path / "movie.mkv"
+    media.touch()
+
+    class StartupOrderApp(SubsApp):
+        CSS_PATH = str(Path(__file__).parents[1] / "style.tcss")
+
+        def __init__(self, *args, **kwargs):
+            self.startup_events = []
+            super().__init__(*args, **kwargs)
+
+        def action_open_engine(self):
+            self.startup_events.append("engine")
+            super().action_open_engine()
+
+        def _refresh_all(self):
+            self.startup_events.append("workspace")
+            super()._refresh_all()
+
+    app = StartupOrderApp(
+        config={"general": {"preferred_backend": "ask"}},
+        media_paths=[str(media)],
+        overrides={},
+    )
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause(0.1)
+            assert isinstance(app.screen, EngineSwitcher)
+            assert app.startup_events[:2] == ["engine", "workspace"]
+
+    asyncio.run(run())
+
+
+def test_initial_folder_language_choice_applies_to_every_file_without_scope_prompt(
+    tmp_path,
+):
+    media_paths = []
+    for name in ("episode-01.mkv", "episode-02.mkv"):
+        media = tmp_path / name
+        media.touch()
+        media_paths.append(str(media))
+    app = SubsApp(
+        config={
+            "general": {
+                "preferred_backend": "subdl",
+                "skip_interactive_menu": False,
+            },
+            "subdl": {
+                "api_key": "configured",
+                "languages": {"English": "en", "Arabic": "ar"},
+            },
+        },
+        media_paths=media_paths,
+        overrides={},
+        coordinator=FakeCoordinator([]),
+    )
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert isinstance(app.screen, LanguagePopover)
+
+            await pilot.press("down", "enter")
+            await pilot.pause()
+
+            assert not isinstance(app.screen, LanguagePopover)
+            assert [item.language for item in app.state.queue] == ["ar", "ar"]
 
     asyncio.run(run())
 
@@ -235,7 +316,11 @@ def test_results_and_multilingual_detail_are_visible(configured_app):
             detail = str(app.query_one("#detail-kv", Static).content)
             assert "Match" in detail
             assert "94" in detail
-            assert detail.count("\n") <= 3
+            hash_line = next(
+                line for line in detail.splitlines() if "[dim]Hash match[/dim]" in line
+            )
+            assert hash_line.endswith("no")
+            assert detail.count("\n") <= 4
             assert str(app.query_one("#download-selected", Button).label) == "Get  ↵"
             assert str(app.query_one("#preview-selected", Button).label) == "View  p"
             assert str(app.query_one("#copy-url", Button).label) == "URL  y"
@@ -302,7 +387,7 @@ def test_results_table_keeps_release_and_numeric_score_visible(configured_app):
             ),
             language="en",
             download_count=48213,
-            score=96,
+            score=100,
         )
     ]
 
@@ -311,13 +396,117 @@ def test_results_table_keeps_release_and_numeric_score_visible(configured_app):
             await pilot.pause(0.3)
 
             table = app.query_one(ResultsTable)
-            assert list(table.columns.values())[0].label.plain == "Release"
-            release_column = list(table.columns.values())[0]
-            assert release_column.width >= 75
-            assert table.get_cell_at((0, 1)) == " EN"
+            assert list(table.columns.values())[0].label.plain == "#"
+            release_column = list(table.columns.values())[1]
+            assert release_column.label.plain == "Release"
+            assert release_column.width >= 71
+            assert table.get_cell_at((0, 2)) == "EN"
             rendered_score = table.get_cell_at((0, len(table.columns) - 1))
-            assert rendered_score.plain == " 96"
+            score_column = list(table.columns.values())[-1]
+            assert score_column.label.plain == "Match"
+            assert rendered_score.plain == " 100"
+            assert len(rendered_score.plain) <= score_column.width
             assert table.max_scroll_x == 0
+
+    asyncio.run(run())
+
+
+def test_results_table_selection_is_terminal_visible(configured_app):
+    app, _ = configured_app
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause(0.3)
+            table = app.query_one(ResultsTable)
+
+            assert table.cursor_type == "row"
+            assert table.cursor_background_priority == "css"
+            assert table.zebra_stripes is True
+            assert (
+                table.get_component_styles("datatable--cursor").background
+                == Color.parse("#2b5273")
+            )
+
+    asyncio.run(run())
+
+
+def test_results_table_has_numbered_index(configured_app):
+    app, _ = configured_app
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause(0.3)
+            table = app.query_one(ResultsTable)
+
+            assert list(table.columns.values())[0].label.plain == "#"
+            assert table.get_cell_at((0, 0)).strip() == "1"
+            assert table.get_cell_at((1, 0)).strip() == "2"
+
+    asyncio.run(run())
+
+
+def test_typing_result_number_jumps_to_row(configured_app):
+    app, coordinator = configured_app
+    coordinator.candidates = [
+        Candidate(
+            provider=Provider.SUBDL,
+            provider_id=str(index),
+            release=f"Release {index:02d}",
+            language="ar",
+            score=100 - index,
+        )
+        for index in range(1, 41)
+    ]
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause(0.3)
+            table = app.query_one(ResultsTable)
+            assert app.focused is table
+
+            await pilot.press("3", "7")
+            await pilot.pause()
+
+            assert app.state.active_view == "search"
+            assert table.cursor_row == 36
+            assert app.cursor_index == 36
+
+    asyncio.run(run())
+
+
+def test_modified_view_shortcuts_open_each_tab(configured_app):
+    app, _ = configured_app
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause(0.3)
+            for key, view in (
+                ("f2", "queue"),
+                ("f3", "history"),
+                ("f4", "config"),
+                ("f1", "search"),
+            ):
+                await pilot.press(key)
+                await pilot.pause()
+                assert app.state.active_view == view
+
+    asyncio.run(run())
+
+
+def test_cycle_view_shortcuts_move_forward_and_backward(configured_app):
+    app, _ = configured_app
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause(0.3)
+
+            await pilot.press("ctrl+pagedown")
+            await pilot.pause()
+            assert app.state.active_view == "queue"
+
+            await pilot.press("ctrl+pageup")
+            await pilot.pause()
+            assert app.state.active_view == "search"
 
     asyncio.run(run())
 
@@ -449,6 +638,26 @@ def test_narrow_terminal_hides_detail_without_hiding_results(configured_app):
     asyncio.run(run())
 
 
+def test_default_terminal_width_prioritizes_results_without_horizontal_scroll(
+    configured_app,
+):
+    app, _ = configured_app
+
+    async def run():
+        async with app.run_test(size=(118, 32)) as pilot:
+            await pilot.pause(0.2)
+            table = app.query_one(ResultsTable)
+
+            assert app.query_one("#detail-panel").display is False
+            assert table.display is True
+            assert table.max_scroll_x == 0
+            assert app.query_one("#chip-command").display is False
+            assert app.query_one("#chip-health").display is False
+            assert app.query_one("#status-settings").display is False
+
+    asyncio.run(run())
+
+
 def test_stale_search_completion_cannot_replace_current_results(configured_app):
     app, _ = configured_app
 
@@ -554,7 +763,7 @@ def test_config_draft_survives_refresh_and_blocks_accidental_navigation(
     async def run():
         async with app.run_test() as pilot:
             await pilot.pause(0.2)
-            await pilot.press("4")
+            await pilot.press("f4")
             ads = app.query_one("#config-ads", Input)
             ads.value = "draft-ads.txt"
             original_engine = app.state.engine_mode
@@ -574,7 +783,7 @@ def test_config_draft_survives_refresh_and_blocks_accidental_navigation(
             app._refresh_all()
             assert ads.value == "draft-ads.txt"
 
-            await pilot.press("1")
+            await pilot.press("f1")
             assert app.state.active_view == "config"
             assert isinstance(app.screen, ConfirmConfigExit)
             assert app.screen.query_one(Static).region.x > 0
@@ -600,7 +809,7 @@ def test_confirmed_config_save_applies_engine_and_language_draft(
     async def run():
         async with app.run_test() as pilot:
             await pilot.pause(0.2)
-            await pilot.press("4")
+            await pilot.press("f4")
             app._engine_chosen((EngineMode.AUTO, False))
             app._language_provider_scope = {Provider.SUBDL}
             app._language_chosen(("fr", "all"))
@@ -642,7 +851,7 @@ def test_failed_config_write_keeps_live_state_and_dirty_draft(
         async with app.run_test() as pilot:
             await pilot.pause(0.2)
             original_engine = app.state.engine_mode
-            await pilot.press("4")
+            await pilot.press("f4")
             app._engine_chosen((EngineMode.AUTO, False))
             await pilot.press("ctrl+s")
             await pilot.pause()

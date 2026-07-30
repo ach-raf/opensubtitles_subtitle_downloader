@@ -172,7 +172,7 @@ class StandardProviderAdapter:
                 provider=self.provider,
                 configured=configured,
                 reachable=False,
-                reason="Not checked",
+                reason="Health probe unsupported",
             )
         try:
             value = checker()

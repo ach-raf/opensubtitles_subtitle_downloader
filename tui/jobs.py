@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -31,12 +32,18 @@ class SubtitleCleaner:
 
 
 class SubtitleSynchronizer:
-    def sync(self, media_path: Path, subtitle_path: Path) -> bool:
+    def sync(
+        self,
+        media_path: Path,
+        subtitle_path: Path,
+        on_output: Callable[[str], None] | None = None,
+    ) -> bool:
         from library.subtitle_utils import SubtitleUtils
 
         return SubtitleUtils().sync_subtitles_strict(
             media_path,
             subtitle_path,
+            on_output=on_output,
         )
 
 
@@ -119,6 +126,7 @@ class JobCoordinator:
         clean: bool,
         sync: bool,
         ads_path: Path | None = None,
+        sync_output: Callable[[str], None] | None = None,
     ) -> PostProcessResult:
         result = PostProcessResult()
         if not download.succeeded or download.subtitle_path is None:
@@ -145,6 +153,7 @@ class JobCoordinator:
                 synced = self.synchronizer.sync(
                     download.media_path,
                     download.subtitle_path,
+                    on_output=sync_output,
                 )
                 if synced is not True:
                     raise RuntimeError("Synchronizer did not report success")
