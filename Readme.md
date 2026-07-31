@@ -7,7 +7,7 @@ It accepts individual video files or folders, opens a keyboard-driven terminal
 interface by default, and can clean, normalize, and synchronize downloaded
 subtitles.
 
-![Subtitle Downloader terminal interface](screenshots/command-deck-wide.png)
+![Subtitle Downloader search results](screenshots/readme-search.png)
 
 ## What it does
 
@@ -23,6 +23,18 @@ subtitles.
   [ffsubsync](https://github.com/smacke/ffsubsync).
 - Includes a full-screen Textual interface and a no-TUI CLI for batch and
   compatibility workflows.
+
+## Interface tour
+
+The Queue view keeps each media file's language, provider mode, progress, and
+errors visible during a batch:
+
+![Subtitle Downloader batch queue](screenshots/readme-queue.png)
+
+Press `Ctrl+K` to search the command palette for navigation, search, provider,
+and application actions:
+
+![Subtitle Downloader command palette filtered to engine actions](screenshots/readme-command-palette.png)
 
 ## Requirements
 
