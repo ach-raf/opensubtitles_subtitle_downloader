@@ -10,6 +10,7 @@ from tui.config import (
     ProviderConfig,
 )
 from tui.domain import Provider, SearchRequest
+from tui.providers.base import candidate_from_standardized
 from tui.providers.factory import create_adapters
 from tui.providers.opensubtitles import OpenSubtitlesAdapter
 from tui.providers.subdl import SubDLAdapter
@@ -107,6 +108,28 @@ def test_opensubtitles_search_requests_inclusive_hi_results(monkeypatch):
     client.search(media_name="Movie", languages="en")
 
     assert captured["params"]["hearing_impaired"] == "include"
+
+
+def test_provider_translation_and_hi_flags_are_normalized():
+    opensubtitles = candidate_from_standardized(
+        Provider.OPENSUBTITLES,
+        {
+            "id": "1",
+            "attributes": {
+                "hearing_impaired": True,
+                "machine_translated": True,
+            },
+        },
+    )
+    subdl = candidate_from_standardized(
+        Provider.SUBDL,
+        {"id": "2", "attributes": {"hi": True}},
+    )
+
+    assert opensubtitles.hearing_impaired is True
+    assert opensubtitles.ai_translated is True
+    assert subdl.hearing_impaired is True
+    assert subdl.ai_translated is False
 
 
 def test_subdl_adapter_keeps_authenticated_url_private():
