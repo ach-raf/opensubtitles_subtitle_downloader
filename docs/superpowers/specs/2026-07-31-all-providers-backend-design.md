@@ -45,29 +45,23 @@ current run in every interface.
   applies the existing visibility filters and scoring, and returns the shared
   ranking used by the TUI.
 
-The implementation must reuse `SearchCoordinator.merge()` and its existing
-ranking logic. TUI and no-TUI must not implement separate scoring rules.
+The implementation must reuse the existing shared-ranking algorithm. The
+feature-facing coordinator method is named for the mode, not for a second
+"merge" option. TUI and no-TUI must not implement separate scoring rules.
 
-## Canonical state and legacy compatibility
+## Single canonical state
 
 Add `ALL_PROVIDERS = "all-providers"` to both backend-mode enums used at the
 CLI and TUI boundaries.
 
-`preferred_backend: all-providers` is the canonical saved representation. The
-existing `general.merge_results` setting becomes a deprecated compatibility
-input:
+`preferred_backend: all-providers` is the only configuration representation.
+There is no `general.merge_results` setting, alias, migration path, saved key,
+or second UI option.
 
-- When an old configuration has `merge_results: true`, load it as the
-  `all-providers` runtime mode.
-- A canonical `preferred_backend: all-providers` takes precedence over a
-  contradictory `merge_results: false`.
-- When configuration is saved from the TUI, write
-  `preferred_backend: all-providers` and normalize `merge_results` to `false`.
-- Concrete, `auto`, and `ask` modes also save with `merge_results: false`.
-
-The TUI may retain its internal `merge_mode` display/layout flag during the
-transition, but it must be derived from `EngineMode.ALL_PROVIDERS`; it must not
-remain an independent source of truth.
+Feature-specific state, actions, labels, status text, and coordinator APIs use
+the `all-providers` name. The word "merge" remains acceptable only for generic
+data operations that combine collections and are not a selectable backend
+mode.
 
 ## TUI behavior
 
@@ -76,7 +70,7 @@ The engine selector shows All providers as a first-class option backed by
 
 When selected:
 
-- Search calls `SearchCoordinator.merge()`.
+- Search calls the coordinator's canonical all-providers operation.
 - `auto_selection: false` displays the combined ranked candidate list for
   manual selection.
 - `auto_selection: true` downloads the first candidate from that same list.
@@ -94,7 +88,7 @@ components without starting Textual:
 
 - Load configured provider adapters.
 - Create one `SearchRequest` per normalized media file.
-- Call `SearchCoordinator.merge()`.
+- Call the coordinator's canonical all-providers operation.
 - Select the first candidate from the returned ranked list.
 - Download it through `JobCoordinator`.
 - Apply the configured cleaning, UTF-8, output-directory, and synchronization
@@ -146,11 +140,8 @@ request.
 ## Documentation and migration
 
 Update `config.yaml.sample`, CLI help, and README to list `all-providers`.
-Explain the difference between `auto` and `all-providers`, the no-TUI
-best-match rule, and the deprecated `merge_results` migration.
-
-Do not rewrite the user's local `config.yaml` automatically. It is migrated
-only when explicitly saved through the application.
+Explain the difference between `auto` and `all-providers` and the no-TUI
+best-match rule. Do not document or emit a second `merge_results` option.
 
 ## Test strategy
 
@@ -159,8 +150,7 @@ Add tests proving:
 - Both enums accept and label `all-providers`.
 - `--backend all-providers` parses and overrides configuration.
 - `preferred_backend: all-providers` survives a configuration round trip.
-- Legacy `merge_results: true` loads as All providers and saves canonically.
-- Contradictory legacy fields resolve to the canonical backend value.
+- Configuration loading and saving never expose or emit `merge_results`.
 - The TUI selector, top bar, status, configuration view, and search dispatch use
   the canonical mode.
 - TUI auto-selection false displays merged candidates; true downloads the
