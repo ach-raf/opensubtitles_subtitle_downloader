@@ -15,18 +15,19 @@ subtitles.
 - Combines OpenSubtitles hash and filename matches.
 - Filters by language, hearing-impaired status, and AI translation status.
 - Handles individual videos, multiple paths, and folders.
-- Downloads the selected subtitle beside its video.
+- Downloads the selected subtitle beside its video or into a configured output
+  directory.
 - Converts subtitle text to UTF-8 when configured.
-- Removes known advertising lines from supported subtitle formats.
-- Synchronizes subtitles to the video's audio with
+- Removes known advertising lines after download when cleaning is enabled.
+- Synchronizes subtitle timing to the video's audio with
   [ffsubsync](https://github.com/smacke/ffsubsync).
-- Includes a full-screen Textual interface and a noninteractive/headless CLI
-  for batch and compatibility workflows.
+- Includes a full-screen Textual interface and a no-TUI CLI for batch and
+  compatibility workflows.
 
 ## Requirements
 
 - Python 3.10 or newer
-- An API key for at least one subtitle provider
+- Credentials for at least one subtitle provider
 - `ffmpeg` if you want audio synchronization
 - Git if you are cloning the repository
 
@@ -113,14 +114,14 @@ and add it to the `subsource` section.
 ```yaml
 general: # Explicit CLI options override these settings for one run.
   preferred_backend: ask # Options: opensubtitles, subdl, subsource, auto, all-providers, ask
-  default_language: "" # ISO code. Blank uses the selected provider's first configured language.
+  default_language: "" # ISO code. Set this explicitly for predictable unattended runs.
   recursive_search: false # Recursively discover video files under folder inputs.
   subtitle_output_directory: "" # Empty saves beside each video. Relative paths resolve from this config file.
   skip_interactive_menu: false # Options: true, false
   sync_audio_to_subs: ask # Options: true, false, ask
   auto_selection: false
   opt_force_utf8: true
-  no_tui: false # Options: true, false. The Textual TUI is the default; set true for the noninteractive/headless CLI (including Send-To batch use). Override per-run with --tui / --no-tui.
+  no_tui: false # Options: true, false. Set true to skip the Textual interface. Override per-run with --tui / --no-tui.
   hearing_impaired: include # Options: include, exclude, only
   show_ai_translated: true
   media_extensions: # Extend or reduce the built-in video extension list.
@@ -181,14 +182,14 @@ Important settings:
 | Setting                     | Values                                                                | Meaning                                                                                |
 | --------------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
 | `preferred_backend`         | `opensubtitles`, `subdl`, `subsource`, `auto`, `all-providers`, `ask` | Selects the provider behavior.                                                         |
-| `default_language`          | ISO language code or empty string                                     | Sets the run's language; empty uses the selected provider's first configured language. |
+| `default_language`          | ISO language code or empty string                                     | Sets the run's language; empty falls back to the first relevant configured language.   |
 | `recursive_search`          | `true`, `false`                                                       | Recursively discovers videos below folder inputs.                                      |
 | `subtitle_output_directory` | path or empty string                                                  | Saves subtitles in one writable directory; empty saves beside each video.              |
-| `skip_interactive_menu`     | `true`, `false`                                                       | Confirms configured startup choices without opening the TUI's initial selection menus. |
-| `sync_audio_to_subs`        | `true`, `false`, `ask`                                                | Always, never, or interactively synchronize after downloading.                         |
-| `auto_selection`            | `true`, `false`                                                       | Automatically chooses a result instead of waiting for a selection.                     |
+| `skip_interactive_menu`     | `true`, `false`                                                       | Skips the TUI's initial language confirmation; `preferred_backend: ask` still opens the provider selector. |
+| `sync_audio_to_subs`        | `true`, `false`, `ask`                                                | Always or never synchronize; `ask` prompts in the TUI and skips sync in no-TUI mode.   |
+| `auto_selection`            | `true`, `false`                                                       | Automatically downloads the top TUI result; no-TUI mode always selects the top result. |
 | `opt_force_utf8`            | `true`, `false`                                                       | Normalizes downloaded subtitle text to UTF-8.                                          |
-| `no_tui`                    | `true`, `false`                                                       | Uses the noninteractive/headless CLI by default when set to `true`.                    |
+| `no_tui`                    | `true`, `false`                                                       | Skips the Textual interface by default when set to `true`.                             |
 | `hearing_impaired`          | `include`, `exclude`, `only`                                          | Controls hearing-impaired subtitle results.                                            |
 | `show_ai_translated`        | `true`, `false`                                                       | Includes or hides subtitles marked as AI translated.                                   |
 | `media_extensions.include`  | list of extensions                                                    | Adds video extensions to the built-in discovery list.                                  |
@@ -202,16 +203,19 @@ folders: `3g2`, `3gp`, `asf`, `avi`, `av1`, `divx`, `f4v`, `flv`, `h264`,
 `h265`, `hevc`, `m2ts`, `m2v`, `m4v`, `mkv`, `mov`, `mp4`, `mpeg`, `mpg`,
 `mts`, `mxf`, `ogm`, `ogv`, `rm`, `rmvb`, `ts`, `vob`, `webm`, and `wmv`.
 Configured values are case-insensitive and may include a leading dot.
-`cleaning_subtitles.supported_media` is separate: it lists subtitle formats the
-cleaner supports, not video input formats.
+`cleaning_subtitles.supported_media` is separate subtitle-format metadata; it
+does not control video discovery.
 
 `hearing_impaired` and `show_ai_translated` use metadata supplied by each
 provider. OpenSubtitles supplies both markers, SubSource supplies HI and machine
 production markers, and SubDL currently supplies HI but no dependable AI
 translation marker. AI filtering is therefore best-effort for SubDL.
 
-`auto` stops after the first configured provider with candidates.
-`all-providers` searches every configured provider and uses one shared ranking.
+`auto` tries configured providers one at a time and stops at the first one with
+candidates. Its base fallback order is SubSource, OpenSubtitles, then SubDL;
+providers marked reachable by a manual diagnostics refresh are tried first.
+`all-providers` searches every configured provider concurrently and uses one
+shared ranking.
 
 To remove additional advertising lines, point
 `cleaning_subtitles.ads.file_path` to a text file containing entries separated
@@ -251,8 +255,8 @@ configuration file's directory; relative `--output-dir` paths resolve from the
 current working directory.
 
 Custom output uses a flat directory. Existing subtitle files are not silently
-overwritten, and the headless CLI rejects a recursive batch when multiple
-videos would produce the same output filename.
+overwritten, and the headless CLI rejects any batch in which multiple videos
+would produce the same output filename.
 
 Start the TUI with a language and provider selected:
 
@@ -267,15 +271,22 @@ python download_subs.py --backend all-providers "movie.mkv"
 ```
 
 Explicit `--lang` and `--backend` options override `config.yaml` for one run. If
-neither `--lang` nor `general.default_language` is set, the first language under
-the selected provider is used. Batch and no-TUI runs apply the resolved language
-automatically without a language prompt.
+neither `--lang` nor `general.default_language` is set, a concrete provider uses
+the first language in its mapping; `all-providers` checks the OpenSubtitles,
+SubDL, then SubSource mappings; and `auto` or `ask` falls back to the first
+OpenSubtitles language. Set an explicit language for predictable unattended
+runs. No-TUI mode applies the resolved language without a language prompt.
 
-Use the noninteractive/headless CLI for a single run:
+Run without the Textual interface:
 
 ```bash
 python download_subs.py --no-tui "path/to/movie.mkv"
 ```
+
+For a fully unattended run, select a concrete provider, `auto`, or
+`all-providers` with `--backend` or `general.preferred_backend`. The value
+`ask` still opens the CLI provider prompt. In no-TUI mode,
+`sync_audio_to_subs: ask` skips synchronization and prints a notice.
 
 Apply a language automatically in a no-TUI batch:
 
@@ -289,10 +300,12 @@ Search every configured provider in a no-TUI batch:
 python download_subs.py --no-tui --backend all-providers "season"
 ```
 
-In the TUI, `auto_selection` controls whether the highest-ranked shared result
-is downloaded automatically or shown for selection. No-TUI always downloads
-the highest-ranked all-provider candidate regardless of `auto_selection`. Provider or
-file failures are reported without stopping later files in the batch.
+In the TUI, `auto_selection` controls whether the highest-ranked result is
+downloaded automatically or shown for selection. No-TUI always downloads the
+highest-ranked result for the selected search mode, regardless of
+`auto_selection`. Provider or file failures are reported without stopping later
+files in the batch. Existing subtitle files are skipped in no-TUI mode rather
+than overwritten.
 
 ### Unattended batch automation
 
@@ -311,11 +324,11 @@ general:
 ```
 
 `preferred_backend: auto` is suitable when an unattended run should stop at the
-first configured provider with candidates. Use `preferred_backend:
+first provider in the fallback order that returns candidates. Use `preferred_backend:
 all-providers` to query every configured provider and choose from their shared
 ranking. Avoid `preferred_backend: ask` for automation because it requires a
-provider choice. If `default_language` is empty, YAML order matters: the first
-entry under the selected provider's `languages` mapping is used.
+provider choice. Set `default_language` explicitly for unattended runs instead
+of relying on the mode-specific language fallback described above.
 
 Command-line options have priority over these settings for the current run:
 
@@ -348,26 +361,27 @@ python download_subs.py --help
 
 ## TUI controls
 
-The interface opens on the Search view. The most useful keys are:
+After any startup provider or language selection, the interface uses the Search
+view. The most useful keys are:
 
 | Key                    | Action                                                        |
 | ---------------------- | ------------------------------------------------------------- |
 | `j`, `k` or arrow keys | Move through results                                          |
 | `Enter`                | Download the selected result                                  |
-| `/`                    | Focus the query field                                         |
-| `L`                    | Select a language                                             |
-| `B`                    | Select a provider, automatic fallback, or all-provider search |
+| `/`                    | Edit the query; press `Enter` to search                       |
+| `Esc`                  | Return focus to the active workspace                          |
+| `L` or `l`             | Select a language                                             |
+| `E` or `e`             | Select a provider, automatic fallback, or all-provider search |
 | `m`                    | Toggle All providers mode                                     |
-| `r`                    | Check provider availability and latency again                 |
-| `p`                    | Preview the selected subtitle                                 |
-| `y`                    | Copy the selected result URL                                  |
-| `1`–`4`                | Open Search, Queue, History, or Config                        |
+| `r`                    | Refresh provider availability and latency diagnostics         |
+| `p`                    | Show details for the selected candidate                       |
+| `y`                    | Copy the candidate's public URL, when available               |
+| `F1`–`F4`              | Open Search, Queue, History, or Config                        |
+| `Ctrl+PgDn` / `Ctrl+PgUp` | Cycle forward or backward through the views                |
 | `Ctrl+K`               | Open the command palette                                      |
-| `Ctrl+S`               | Save configuration changes                                    |
-| `?`                    | Open the built-in key reference                               |
-| `q`                    | Quit                                                          |
-
-The language and provider selectors also accept lowercase `l` and `b`.
+| `Ctrl+S`               | Review and save changes from the Config view                  |
+| `?`                    | Show the shortcut reminder                                    |
+| `q`                    | Quit; unfinished work or unsaved settings require confirmation |
 
 When `sync_audio_to_subs` is `ask`, the application asks whether to synchronize
 after a successful download. When it is `true` or `false`, that choice is
@@ -386,8 +400,8 @@ To add it to the Windows Send To menu:
 3. Put a shortcut to the edited batch file in that folder.
 
 You can then right-click a video or folder and send it to the downloader. Set
-`general.no_tui: true` if you prefer the noninteractive/headless CLI for this
-workflow.
+`general.no_tui: true` if you prefer the no-TUI CLI for this workflow. Also set
+a non-`ask` backend for unattended use.
 
 ## Linux and macOS (run from anywhere)
 
@@ -426,16 +440,16 @@ download_subs.sh "path/to/movie.mkv"
 download_subs.sh "path/to/season 01"
 ```
 
-Set `general.no_tui: true` if you prefer the noninteractive/headless CLI for this
-workflow.
+Set `general.no_tui: true` if you prefer the no-TUI CLI for this workflow. Also
+set a non-`ask` backend for unattended use.
 
 ## Troubleshooting
 
 ### A provider returns no results
 
-Check that its API key and language mapping are present in `config.yaml`. In
-the TUI, press `r` to check provider availability, then try a different
-provider or All providers mode.
+Check that its required credentials and language mapping are present in
+`config.yaml`. In the TUI, press `r` to check provider availability, then try a
+different provider or All providers mode.
 
 ### Synchronization fails
 
@@ -453,8 +467,9 @@ Use `--no-tui` or set `general.no_tui: true` in `config.yaml`.
 
 ### An existing subtitle is not replaced
 
-The application asks before overwriting an existing subtitle. Confirm the
-replacement when prompted.
+The TUI asks before replacing an existing subtitle. Confirm the replacement
+when prompted. No-TUI mode reports the conflict and skips that file; it never
+overwrites it automatically.
 
 Report reproducible problems in the
 [GitHub issue tracker](https://github.com/ach-raf/opensubtitles_subtitle_downloader/issues).
