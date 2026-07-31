@@ -43,7 +43,7 @@ def create_adapters(
             api_key=values.get("api_key", ""),
             user_agent=values.get("user_agent", ""),
             sync_audio_to_subs=sync,
-            hearing_impaired=False,
+            hearing_impaired=True,
             auto_select=False,
         )
 

@@ -3,7 +3,14 @@ from pathlib import Path
 from library.OpenSubtitles import OpenSubtitles
 from library.SubDL import SubDL
 from library.SubSource import SubSource
+from tui.config import (
+    ApplicationConfig,
+    CleaningConfig,
+    GeneralConfig,
+    ProviderConfig,
+)
 from tui.domain import Provider, SearchRequest
+from tui.providers.factory import create_adapters
 from tui.providers.opensubtitles import OpenSubtitlesAdapter
 from tui.providers.subdl import SubDLAdapter
 from tui.providers.subsource import SubSourceAdapter
@@ -53,6 +60,53 @@ class SecretFailingClient:
 class QuietConsole:
     def print(self, *_args, **_kwargs):
         return None
+
+
+def test_factory_requests_inclusive_opensubtitles_results(monkeypatch):
+    monkeypatch.setattr(OpenSubtitles, "login", lambda _self: "token")
+    providers = {provider: ProviderConfig(provider) for provider in Provider}
+    providers[Provider.OPENSUBTITLES].values.update(
+        username="user",
+        password="pass",
+        api_key="key",
+        user_agent="app",
+    )
+    config = ApplicationConfig(
+        general=GeneralConfig(),
+        providers=providers,
+        cleaning=CleaningConfig(),
+    )
+
+    adapter = create_adapters(config)[Provider.OPENSUBTITLES]
+
+    assert adapter.client.hearing_impaired is True
+
+
+def test_opensubtitles_search_requests_inclusive_hi_results(monkeypatch):
+    captured = {}
+    client = object.__new__(OpenSubtitles)
+    client.hearing_impaired = True
+    client.api_key = "key"
+    client.token = "token"
+    client.user_agent = "app"
+    client.console = QuietConsole()
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": []}
+
+    def fake_get(_url, **kwargs):
+        captured.update(kwargs)
+        return Response()
+
+    monkeypatch.setattr("library.OpenSubtitles.requests.get", fake_get)
+
+    client.search(media_name="Movie", languages="en")
+
+    assert captured["params"]["hearing_impaired"] == "include"
 
 
 def test_subdl_adapter_keeps_authenticated_url_private():
