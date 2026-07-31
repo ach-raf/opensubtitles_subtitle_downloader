@@ -111,18 +111,21 @@ and add it to the `subsource` section.
 `config.yaml.sample` is the best starting point. A shortened example:
 
 ```yaml
-general:
-  preferred_backend: ask
-  default_language: ""
-  recursive_search: false
-  subtitle_output_directory: ""
-  skip_interactive_menu: false
-  sync_audio_to_subs: ask
+general: # Explicit CLI options override these settings for one run.
+  preferred_backend: ask # Options: opensubtitles, subdl, subsource, auto, all-providers, ask
+  default_language: "" # ISO code. Blank uses the selected provider's first configured language.
+  recursive_search: false # Recursively discover video files under folder inputs.
+  subtitle_output_directory: "" # Empty saves beside each video. Relative paths resolve from this config file.
+  skip_interactive_menu: false # Options: true, false
+  sync_audio_to_subs: ask # Options: true, false, ask
   auto_selection: false
   opt_force_utf8: true
-  no_tui: false
-  hearing_impaired: include
+  no_tui: false # Options: true, false. The Textual TUI is the default; set true for the noninteractive/headless CLI (including Send-To batch use). Override per-run with --tui / --no-tui.
+  hearing_impaired: include # Options: include, exclude, only
   show_ai_translated: true
+  media_extensions: # Extend or reduce the built-in video extension list.
+    include: [] # Example: [custom]
+    exclude: [] # Example: [wmv, .ts]. Exclusions win over inclusions.
 
 opensubtitles:
   username: opensubtitles_username
@@ -132,44 +135,80 @@ opensubtitles:
   languages:
     English: en
     Arabic: ar
+    French: fr
+    Japanese: ja
 
 subdl:
   api_key: subdl_api_key
   languages:
     English: en
     Arabic: ar
+    French: fr
+    Japanese: ja
 
 subsource:
-  api_key: subsource_api_key
+  api_key: subsource_api_key # sk_... from your SubSource profile page
   languages:
     English: en
     Arabic: ar
+    French: fr
+    Japanese: ja
 
 cleaning_subtitles:
   enabled: true
+  supported_media:
+    - srt
+    - ass
+    - ssa
+    - sub
+    - smi
+    - vtt
+    - ttml
+    - dfxp
+    - mpl2
+    - lrc
+    - sbv
+    - rt
+    - txt
   ads:
     separator: ","
     file_path: ""
+    #file_path: "C:\\clean_subtitles\\ads.txt" example
 ```
 
 Important settings:
 
-| Setting | Values | Meaning |
-|---|---|---|
-| `preferred_backend` | `opensubtitles`, `subdl`, `subsource`, `auto`, `all-providers`, `ask` | Selects the provider behavior. |
-| `default_language` | ISO language code or empty string | Sets the run's language; empty uses the selected provider's first configured language. |
-| `recursive_search` | `true`, `false` | Recursively discovers videos below folder inputs. |
-| `subtitle_output_directory` | path or empty string | Saves subtitles in one writable directory; empty saves beside each video. |
-| `skip_interactive_menu` | `true`, `false` | Confirms configured startup choices without opening the TUI's initial selection menus. |
-| `sync_audio_to_subs` | `true`, `false`, `ask` | Always, never, or interactively synchronize after downloading. |
-| `auto_selection` | `true`, `false` | Automatically chooses a result instead of waiting for a selection. |
-| `opt_force_utf8` | `true`, `false` | Normalizes downloaded subtitle text to UTF-8. |
-| `no_tui` | `true`, `false` | Uses the noninteractive/headless CLI by default when set to `true`. |
-| `hearing_impaired` | `include`, `exclude`, `only` | Controls hearing-impaired subtitle results. |
-| `show_ai_translated` | `true`, `false` | Includes or hides subtitles marked as AI translated. |
+| Setting                     | Values                                                                | Meaning                                                                                |
+| --------------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `preferred_backend`         | `opensubtitles`, `subdl`, `subsource`, `auto`, `all-providers`, `ask` | Selects the provider behavior.                                                         |
+| `default_language`          | ISO language code or empty string                                     | Sets the run's language; empty uses the selected provider's first configured language. |
+| `recursive_search`          | `true`, `false`                                                       | Recursively discovers videos below folder inputs.                                      |
+| `subtitle_output_directory` | path or empty string                                                  | Saves subtitles in one writable directory; empty saves beside each video.              |
+| `skip_interactive_menu`     | `true`, `false`                                                       | Confirms configured startup choices without opening the TUI's initial selection menus. |
+| `sync_audio_to_subs`        | `true`, `false`, `ask`                                                | Always, never, or interactively synchronize after downloading.                         |
+| `auto_selection`            | `true`, `false`                                                       | Automatically chooses a result instead of waiting for a selection.                     |
+| `opt_force_utf8`            | `true`, `false`                                                       | Normalizes downloaded subtitle text to UTF-8.                                          |
+| `no_tui`                    | `true`, `false`                                                       | Uses the noninteractive/headless CLI by default when set to `true`.                    |
+| `hearing_impaired`          | `include`, `exclude`, `only`                                          | Controls hearing-impaired subtitle results.                                            |
+| `show_ai_translated`        | `true`, `false`                                                       | Includes or hides subtitles marked as AI translated.                                   |
+| `media_extensions.include`  | list of extensions                                                    | Adds video extensions to the built-in discovery list.                                  |
+| `media_extensions.exclude`  | list of extensions                                                    | Removes video extensions; exclusions take precedence over additions.                   |
 
 Each provider has its own `languages` mapping. The display name is shown in the
 interface; the value is the provider's language code.
+
+Media discovery uses one built-in list for direct files, folders, and recursive
+folders: `3g2`, `3gp`, `asf`, `avi`, `av1`, `divx`, `f4v`, `flv`, `h264`,
+`h265`, `hevc`, `m2ts`, `m2v`, `m4v`, `mkv`, `mov`, `mp4`, `mpeg`, `mpg`,
+`mts`, `mxf`, `ogm`, `ogv`, `rm`, `rmvb`, `ts`, `vob`, `webm`, and `wmv`.
+Configured values are case-insensitive and may include a leading dot.
+`cleaning_subtitles.supported_media` is separate: it lists subtitle formats the
+cleaner supports, not video input formats.
+
+`hearing_impaired` and `show_ai_translated` use metadata supplied by each
+provider. OpenSubtitles supplies both markers, SubSource supplies HI and machine
+production markers, and SubDL currently supplies HI but no dependable AI
+translation marker. AI filtering is therefore best-effort for SubDL.
 
 `auto` stops after the first configured provider with candidates.
 `all-providers` searches every configured provider and uses one shared ranking.
@@ -311,22 +350,22 @@ python download_subs.py --help
 
 The interface opens on the Search view. The most useful keys are:
 
-| Key | Action |
-|---|---|
-| `j`, `k` or arrow keys | Move through results |
-| `Enter` | Download the selected result |
-| `/` | Focus the query field |
-| `L` | Select a language |
-| `B` | Select a provider, automatic fallback, or all-provider search |
-| `m` | Toggle All providers mode |
-| `r` | Check provider availability and latency again |
-| `p` | Preview the selected subtitle |
-| `y` | Copy the selected result URL |
-| `1`–`4` | Open Search, Queue, History, or Config |
-| `Ctrl+K` | Open the command palette |
-| `Ctrl+S` | Save configuration changes |
-| `?` | Open the built-in key reference |
-| `q` | Quit |
+| Key                    | Action                                                        |
+| ---------------------- | ------------------------------------------------------------- |
+| `j`, `k` or arrow keys | Move through results                                          |
+| `Enter`                | Download the selected result                                  |
+| `/`                    | Focus the query field                                         |
+| `L`                    | Select a language                                             |
+| `B`                    | Select a provider, automatic fallback, or all-provider search |
+| `m`                    | Toggle All providers mode                                     |
+| `r`                    | Check provider availability and latency again                 |
+| `p`                    | Preview the selected subtitle                                 |
+| `y`                    | Copy the selected result URL                                  |
+| `1`–`4`                | Open Search, Queue, History, or Config                        |
+| `Ctrl+K`               | Open the command palette                                      |
+| `Ctrl+S`               | Save configuration changes                                    |
+| `?`                    | Open the built-in key reference                               |
+| `q`                    | Quit                                                          |
 
 The language and provider selectors also accept lowercase `l` and `b`.
 
