@@ -52,14 +52,26 @@ git clone https://github.com/ach-raf/opensubtitles_subtitle_downloader.git
 cd opensubtitles_subtitle_downloader
 ```
 
-Using `uv`:
+Using [uv](https://docs.astral.sh/uv/) (recommended):
 
 ```bash
-uv venv
-uv pip install -r requirements.txt
+uv sync
 ```
 
-Or using the standard library:
+This creates `.venv` and installs the locked runtime dependencies. You do not
+need to activate the environment; prefix commands with `uv run`, for example:
+
+```bash
+uv run python download_subs.py "path/to/movie.mkv"
+```
+
+Contributors can include the formatting, linting, and test tools with:
+
+```bash
+uv sync --group dev
+```
+
+Or use the standard library and `pip`:
 
 ```bash
 python -m venv .venv
@@ -235,6 +247,10 @@ by `cleaning_subtitles.ads.separator`. When no path is set, the bundled list is
 used.
 
 ## Usage
+
+The examples below use `python`. If you installed with uv, run them as
+`uv run python ...` instead; uv keeps the project environment synchronized
+automatically.
 
 Open the TUI for one video:
 

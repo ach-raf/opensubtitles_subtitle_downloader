@@ -1,3 +1,35 @@
+[project]
+name = "subtitle-downloader"
+version = "0.1.0"
+description = "Find, compare, and download subtitles from multiple providers."
+readme = "Readme.md"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = [
+    "chardet<6",
+    "charset-normalizer>=3,<4",
+    "ffmpeg",
+    "ffsubsync",
+    "pyyaml",
+    "rarfile",
+    "requests",
+    "rich",
+    "ruamel.yaml>=0.18,<0.19",
+    "textual>=8,<9",
+    "thefuzz",
+]
+
+[dependency-groups]
+dev = [
+    "black",
+    "pytest",
+    "ruff",
+]
+
+[tool.uv]
+package = false
+default-groups = []
+
 [tool.black]
 target-version = ["py310"]
 line-length = 88
