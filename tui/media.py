@@ -7,7 +7,58 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-MEDIA_EXTENSIONS = {"avi", "m4v", "mkv", "mov", "mp4", "ts", "webm"}
+DEFAULT_MEDIA_EXTENSIONS = frozenset(
+    {
+        "3g2",
+        "3gp",
+        "asf",
+        "avi",
+        "av1",
+        "divx",
+        "f4v",
+        "flv",
+        "h264",
+        "h265",
+        "hevc",
+        "m2ts",
+        "m2v",
+        "m4v",
+        "mkv",
+        "mov",
+        "mp4",
+        "mpeg",
+        "mpg",
+        "mts",
+        "mxf",
+        "ogm",
+        "ogv",
+        "rm",
+        "rmvb",
+        "ts",
+        "vob",
+        "webm",
+        "wmv",
+    }
+)
+
+def resolve_media_extensions(
+    include: Iterable[str] = (),
+    exclude: Iterable[str] = (),
+) -> set[str]:
+    def normalize(value: object) -> str:
+        return str(value).strip().lower().lstrip(".")
+
+    additions = {
+        normalized
+        for value in include
+        if (normalized := normalize(value))
+    }
+    removals = {
+        normalized
+        for value in exclude
+        if (normalized := normalize(value))
+    }
+    return (set(DEFAULT_MEDIA_EXTENSIONS) | additions) - removals
 
 
 @dataclass(frozen=True)

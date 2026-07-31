@@ -8,7 +8,7 @@ import yaml
 from rich.console import Console
 from rich.table import Table
 
-from tui.media import MEDIA_EXTENSIONS, expand_media_paths
+from tui.media import expand_media_paths, resolve_media_extensions
 
 console = Console()
 
@@ -451,9 +451,16 @@ def run_legacy(
         console.print("[bold red]Error: No media paths provided. Exiting...[/]")
         sys.exit(1)
 
+    general = downloader.config.get("general") or {}
+    media_extensions = general.get("media_extensions") or {}
+    if not isinstance(media_extensions, dict):
+        media_extensions = {}
     expansion = expand_media_paths(
         media_paths,
-        MEDIA_EXTENSIONS,
+        resolve_media_extensions(
+            media_extensions.get("include") or [],
+            media_extensions.get("exclude") or [],
+        ),
         recursive=recursive,
     )
     media_paths = [str(path) for path in expansion.paths]

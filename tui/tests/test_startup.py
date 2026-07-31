@@ -221,6 +221,42 @@ def test_legacy_expands_recursively_before_provider_dispatch(
     assert calls["download"][0] == [str(nested_media.resolve())]
 
 
+def test_legacy_uses_configured_media_extension_overrides(tmp_path, monkeypatch):
+    included = tmp_path / "Movie.custom"
+    excluded = tmp_path / "Ignored.mkv"
+    included.touch()
+    excluded.touch()
+    calls = {}
+
+    class FakeDownloader:
+        config = {
+            "general": {
+                "preferred_backend": "subdl",
+                "media_extensions": {
+                    "include": [".CUSTOM"],
+                    "exclude": ["mkv"],
+                },
+            },
+            "subdl": {"languages": {"English": "en"}},
+        }
+
+        def download_subtitles(self, media_paths, language, backend):
+            calls["download"] = (media_paths, language, backend)
+
+        def _get_backend_from_config(self):
+            return download_subs.SubtitleBackend.SUBDL
+
+    monkeypatch.setattr(
+        download_subs,
+        "SubtitleDownloader",
+        lambda *_args, **_kwargs: FakeDownloader(),
+    )
+
+    download_subs.run_legacy("config.yaml", [str(tmp_path)])
+
+    assert calls["download"][0] == [str(included.resolve())]
+
+
 def test_legacy_uses_resolved_language_without_opening_language_menu(
     tmp_path,
     monkeypatch,

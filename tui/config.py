@@ -44,6 +44,8 @@ class GeneralConfig:
     no_tui: bool = False
     hearing_impaired: str = "include"
     show_ai_translated: bool = True
+    media_extensions_include: list[str] = field(default_factory=list)
+    media_extensions_exclude: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -150,6 +152,9 @@ class ConfigRepository:
         self._loaded_raw = copy.deepcopy(raw)
 
         general_raw = raw.get("general") or {}
+        media_extensions_raw = general_raw.get("media_extensions") or {}
+        if not isinstance(media_extensions_raw, MutableMapping):
+            media_extensions_raw = {}
         preferred_backend = _safe_mode(
             general_raw.get("preferred_backend", EngineMode.ASK.value)
         )
@@ -173,6 +178,14 @@ class ConfigRepository:
                 general_raw.get("hearing_impaired", "include")
             ).lower(),
             show_ai_translated=bool(general_raw.get("show_ai_translated", True)),
+            media_extensions_include=[
+                str(value)
+                for value in (media_extensions_raw.get("include") or [])
+            ],
+            media_extensions_exclude=[
+                str(value)
+                for value in (media_extensions_raw.get("exclude") or [])
+            ],
         )
         providers: dict[Provider, ProviderConfig] = {}
         for provider in Provider:
@@ -230,6 +243,21 @@ class ConfigRepository:
             elif name == "sync_audio_to_subs":
                 value = {"always": True, "never": False}.get(value, "ask")
             general_output[name] = value
+        if (
+            "media_extensions" in (self._loaded_raw.get("general") or {})
+            or config.general.media_extensions_include
+            or config.general.media_extensions_exclude
+        ):
+            media_extensions_output = self._section(
+                general_output,
+                "media_extensions",
+            )
+            media_extensions_output["include"] = list(
+                config.general.media_extensions_include
+            )
+            media_extensions_output["exclude"] = list(
+                config.general.media_extensions_exclude
+            )
         for provider, provider_config in config.providers.items():
             provider_output = self._section(output, provider.value)
             provider_output.update(provider_config.values)

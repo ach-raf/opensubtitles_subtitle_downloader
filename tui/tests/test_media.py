@@ -1,4 +1,24 @@
-from tui.media import expand_media_paths
+from tui.media import (
+    DEFAULT_MEDIA_EXTENSIONS,
+    expand_media_paths,
+    resolve_media_extensions,
+)
+
+
+def test_default_media_extensions_cover_common_video_formats():
+    assert {"avi", "av1", "mkv", "mp4"} <= DEFAULT_MEDIA_EXTENSIONS
+
+
+def test_resolve_media_extensions_extends_and_excludes_defaults():
+    extensions = resolve_media_extensions(
+        include=[".CUSTOM", "ts"],
+        exclude=[".TS", "AVI"],
+    )
+
+    assert "custom" in extensions
+    assert "mkv" in extensions
+    assert "ts" not in extensions
+    assert "avi" not in extensions
 
 
 def test_expand_media_paths_expands_directories_non_recursively(tmp_path):

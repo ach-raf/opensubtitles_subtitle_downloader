@@ -46,7 +46,7 @@ from tui.domain import (
 )
 from tui.jobs import JobCoordinator
 from tui.keymap import Action, Keymap
-from tui.media import MEDIA_EXTENSIONS, expand_media_paths
+from tui.media import expand_media_paths, resolve_media_extensions
 from tui.providers import create_adapters
 from tui.search import CoordinatedSearchResult, SearchCoordinator
 from tui.state import SessionState, native_name
@@ -492,7 +492,10 @@ class SubsApp(App):
 
         expansion = expand_media_paths(
             media_paths or [],
-            MEDIA_EXTENSIONS,
+            resolve_media_extensions(
+                self.application_config.general.media_extensions_include,
+                self.application_config.general.media_extensions_exclude,
+            ),
             recursive=recursive_search,
         )
         if (
@@ -602,6 +605,14 @@ class SubsApp(App):
         if "sync_audio_to_subs" in general:
             self.application_config.general.sync_audio_to_subs = normalize_sync_policy(
                 general["sync_audio_to_subs"]
+            )
+        media_extensions = general.get("media_extensions") or {}
+        if isinstance(media_extensions, dict):
+            self.application_config.general.media_extensions_include = list(
+                media_extensions.get("include") or []
+            )
+            self.application_config.general.media_extensions_exclude = list(
+                media_extensions.get("exclude") or []
             )
         if "preferred_backend" in general:
             try:

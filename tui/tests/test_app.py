@@ -58,6 +58,28 @@ def test_recursive_startup_adds_nested_media_to_queue(tmp_path):
     assert [item.path for item in app.state.queue] == [nested_media.resolve()]
 
 
+def test_startup_uses_configured_media_extension_overrides(tmp_path):
+    included = tmp_path / "Movie.custom"
+    excluded = tmp_path / "Ignored.mkv"
+    included.touch()
+    excluded.touch()
+
+    app = SubsApp(
+        config={
+            "general": {
+                "media_extensions": {
+                    "include": [".CUSTOM"],
+                    "exclude": ["mkv"],
+                }
+            }
+        },
+        media_paths=[str(tmp_path)],
+        overrides={},
+    )
+
+    assert [item.path for item in app.state.queue] == [included.resolve()]
+
+
 @pytest.fixture
 def configured_app(tmp_path):
     media = tmp_path / "الهيبة.S01E03.mkv"

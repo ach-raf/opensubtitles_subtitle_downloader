@@ -17,6 +17,9 @@ general:
   no_tui: false
   hearing_impaired: include
   show_ai_translated: true
+  media_extensions:
+    include: [custom]
+    exclude: [.wmv]
   future_setting: preserved
 opensubtitles:
   username: user
@@ -59,6 +62,8 @@ def test_config_repository_round_trips_supported_fields_atomically(tmp_path):
     assert reloaded.general.default_language == "ar"
     assert reloaded.general.recursive_search is True
     assert reloaded.general.subtitle_output_directory == "subtitle-cache"
+    assert reloaded.general.media_extensions_include == ["custom"]
+    assert reloaded.general.media_extensions_exclude == [".wmv"]
     assert "general.preferred_backend" in diff.changed_fields
     assert reloaded.providers[Provider.SUBDL].languages["Japanese"] == "ja"
     assert "subdl.languages.Japanese" in diff.changed_fields
@@ -67,6 +72,7 @@ def test_config_repository_round_trips_supported_fields_atomically(tmp_path):
     assert "future_setting: preserved" in saved
     assert "# Keep this operator note" in saved
     assert "# preferred provider" in saved
+    assert "media_extensions:" in saved
     assert not list(tmp_path.glob("*.tmp"))
 
     reloaded.general.default_language = "fr"

@@ -10,6 +10,9 @@ general: # Explicit CLI options override these settings for one run.
   no_tui: false # Options: true, false. The Textual TUI is the default; set true for the noninteractive/headless CLI (including Send-To batch use). Override per-run with --tui / --no-tui.
   hearing_impaired: include # Options: include, exclude, only
   show_ai_translated: true
+  media_extensions: # Extend or reduce the built-in video extension list.
+    include: [] # Example: [custom]
+    exclude: [] # Example: [wmv, .ts]. Exclusions win over inclusions.
 
 opensubtitles:
   username: opensubtitles_username
