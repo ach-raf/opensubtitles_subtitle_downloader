@@ -1,4 +1,6 @@
 import asyncio
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -6,6 +8,7 @@ from textual.color import Color
 from textual.widgets import Button, ContentSwitcher, DataTable, Input, Static
 
 from tui.app import ConfirmConfigExit, ConfirmConfigSave, ConfirmQuit, SubsApp
+from tui.config import ConfigRepository
 from tui.domain import Candidate, EngineMode, Provider, QueueStatus
 from tui.search import CoordinatedSearchResult
 from tui.widgets.overlays.engine_switcher import EngineSwitcher
@@ -18,6 +21,8 @@ class FakeCoordinator:
     def __init__(self, candidates):
         self.candidates = candidates
         self.requests = []
+        self.auto_requests = []
+        self.all_providers_requests = []
 
     def concrete(self, provider, request):
         self.requests.append(request)
@@ -29,11 +34,28 @@ class FakeCoordinator:
 
     def auto(self, request, health=None):
         self.requests.append(request)
+        self.auto_requests.append(request)
         return CoordinatedSearchResult(candidates=list(self.candidates))
 
-    def merge(self, request, health=None):
+    def all_providers(self, request, health=None):
         self.requests.append(request)
+        self.all_providers_requests.append(request)
         return CoordinatedSearchResult(candidates=list(self.candidates))
+
+
+def test_recursive_startup_adds_nested_media_to_queue(tmp_path):
+    nested_media = tmp_path / "Movie" / "movie.mkv"
+    nested_media.parent.mkdir()
+    nested_media.touch()
+
+    app = SubsApp(
+        config={},
+        media_paths=[str(tmp_path)],
+        overrides={},
+        recursive_search=True,
+    )
+
+    assert [item.path for item in app.state.queue] == [nested_media.resolve()]
 
 
 @pytest.fixture
@@ -140,17 +162,257 @@ def test_all_providers_choice_updates_engine_label_and_search_mode(configured_ap
     async def run():
         async with app.run_test() as pilot:
             await pilot.pause(0.3)
-            app._engine_chosen((EngineMode.AUTO, True))
+            app._engine_chosen(EngineMode.ALL_PROVIDERS)
             await pilot.pause()
 
-            assert app.merge_mode is True
-            assert app.application_config.general.merge_results is True
+            assert app.state.engine_mode is EngineMode.ALL_PROVIDERS
+            assert app.all_providers_mode is True
             assert "ENGINE All providers" in str(
                 app.query_one("#chip-engine", Button).label
             )
-            assert coordinator.requests
+            assert coordinator.all_providers_requests
 
     asyncio.run(run())
+
+
+def test_all_providers_mode_dispatches_all_providers_search(configured_app):
+    app, coordinator = configured_app
+    app.state.choose_engine(EngineMode.ALL_PROVIDERS)
+    app.set_reactive(SubsApp.all_providers_mode, True)
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause(0.3)
+            assert coordinator.all_providers_requests
+            assert not coordinator.auto_requests
+
+    asyncio.run(run())
+
+
+def test_all_providers_auto_selection_downloads_first_ranked_candidate(
+    configured_app,
+):
+    app, coordinator = configured_app
+    coordinator.candidates = [
+        Candidate(
+            provider=Provider.SUBDL,
+            provider_id="best",
+            release="best",
+            language="ar",
+            score=99,
+        ),
+        Candidate(
+            provider=Provider.OPENSUBTITLES,
+            provider_id="lower",
+            release="lower",
+            language="ar",
+            score=70,
+        ),
+    ]
+    app.state.choose_engine(EngineMode.ALL_PROVIDERS)
+    app.application_config.general.preferred_backend = EngineMode.ALL_PROVIDERS
+    app.application_config.general.auto_selection = True
+    app.set_reactive(SubsApp.all_providers_mode, True)
+    downloaded = []
+    app.run_download = (
+        lambda _item_key, candidate, _overwrite: downloaded.append(candidate)
+    )
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause(0.3)
+            assert [candidate.provider_id for candidate in downloaded] == ["best"]
+
+    asyncio.run(run())
+
+
+def test_all_providers_raw_dictionary_config_uses_canonical_mode():
+    app = SubsApp(
+        config={
+            "general": {
+                "preferred_backend": "all-providers",
+            },
+            "subdl": {"api_key": "configured"},
+        },
+        media_paths=[],
+        overrides={},
+    )
+
+    assert app.state.engine_mode is EngineMode.ALL_PROVIDERS
+    assert app.application_config.general.preferred_backend is EngineMode.ALL_PROVIDERS
+    assert app.all_providers_mode is True
+
+
+def test_all_providers_toggle_restores_previous_mode_and_falls_back_to_auto():
+    app = SubsApp(
+        config={
+            "general": {
+                "preferred_backend": "subdl",
+                "skip_interactive_menu": True,
+            },
+            "subdl": {"api_key": "configured"},
+        },
+        media_paths=[],
+        overrides={},
+    )
+
+    async def run():
+        async with app.run_test():
+            app.action_toggle_all_providers()
+            assert app.state.engine_mode is EngineMode.ALL_PROVIDERS
+            app.action_toggle_all_providers()
+            assert app.state.engine_mode is EngineMode.SUBDL
+
+        fallback_app = SubsApp(config={}, media_paths=[], overrides={})
+        async with fallback_app.run_test():
+            fallback_app.action_toggle_all_providers()
+            assert fallback_app.state.engine_mode is EngineMode.ALL_PROVIDERS
+            fallback_app.action_toggle_all_providers()
+            assert fallback_app.state.engine_mode is EngineMode.AUTO
+
+    asyncio.run(run())
+
+
+def test_engine_choice_outside_config_view_persists_canonical_mode(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "general:\n"
+        "  preferred_backend: subdl\n"
+        "  default_language: ar\n"
+        "  skip_interactive_menu: true\n"
+        "subdl:\n"
+        "  api_key: configured\n"
+        "  languages:\n"
+        "    Arabic: ar\n",
+        encoding="utf-8",
+    )
+    media = tmp_path / "movie.mkv"
+    media.touch()
+    coordinator = FakeCoordinator([])
+    app = SubsApp(
+        media_paths=[str(media)],
+        config_path=str(config_path),
+        coordinator=coordinator,
+    )
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause(0.2)
+            assert app.state.active_view == "search"
+            app._engine_chosen(EngineMode.ALL_PROVIDERS)
+            await pilot.pause()
+
+    asyncio.run(run())
+
+    reloaded = ConfigRepository(config_path).load()
+    assert reloaded.general.preferred_backend is EngineMode.ALL_PROVIDERS
+
+
+def test_engine_choice_does_not_persist_cli_only_language_override(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "general:\n"
+        "  preferred_backend: subdl\n"
+        "  default_language: en\n"
+        "  skip_interactive_menu: false\n"
+        "subdl:\n"
+        "  api_key: configured\n"
+        "  languages:\n"
+        "    English: en\n",
+        encoding="utf-8",
+    )
+    media = tmp_path / "movie.mkv"
+    media.touch()
+    app = SubsApp(
+        media_paths=[str(media)],
+        config_path=str(config_path),
+        coordinator=FakeCoordinator([]),
+        overrides={"lang": "ar"},
+        language_resolution=("ar", "cli"),
+    )
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause(0.2)
+            assert app.application_config.general.skip_interactive_menu is True
+            app._engine_chosen(EngineMode.ALL_PROVIDERS)
+            await pilot.pause()
+
+    asyncio.run(run())
+
+    reloaded = ConfigRepository(config_path).load()
+    assert reloaded.general.preferred_backend is EngineMode.ALL_PROVIDERS
+    assert reloaded.general.skip_interactive_menu is False
+
+
+def test_toggle_all_providers_outside_config_view_persists_canonical_mode(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "general:\n"
+        "  preferred_backend: subdl\n"
+        "  default_language: ar\n"
+        "  skip_interactive_menu: true\n"
+        "subdl:\n"
+        "  api_key: configured\n"
+        "  languages:\n"
+        "    Arabic: ar\n",
+        encoding="utf-8",
+    )
+    media = tmp_path / "movie.mkv"
+    media.touch()
+    app = SubsApp(
+        media_paths=[str(media)],
+        config_path=str(config_path),
+        coordinator=FakeCoordinator([]),
+    )
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause(0.2)
+            assert app.state.active_view == "search"
+            generation = app.search_generation
+            app.action_toggle_all_providers()
+            await pilot.pause()
+            assert app.search_generation > generation
+            assert app.coordinator.all_providers_requests
+
+    asyncio.run(run())
+
+    reloaded = ConfigRepository(config_path).load()
+    assert reloaded.general.preferred_backend is EngineMode.ALL_PROVIDERS
+
+
+def test_palette_engine_action_persists_selected_mode(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "general:\n"
+        "  preferred_backend: all-providers\n"
+        "  default_language: ar\n"
+        "  skip_interactive_menu: true\n"
+        "subdl:\n"
+        "  api_key: configured\n"
+        "  languages:\n"
+        "    Arabic: ar\n",
+        encoding="utf-8",
+    )
+    media = tmp_path / "movie.mkv"
+    media.touch()
+    app = SubsApp(
+        media_paths=[str(media)],
+        config_path=str(config_path),
+        coordinator=FakeCoordinator([]),
+    )
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause(0.2)
+            app._set_engine_action(EngineMode.SUBDL)
+            await pilot.pause()
+
+    asyncio.run(run())
+
+    reloaded = ConfigRepository(config_path).load()
+    assert reloaded.general.preferred_backend is EngineMode.SUBDL
 
 
 def test_repeated_view_switching_does_not_rebuild_unchanged_tables(
@@ -286,6 +548,182 @@ def test_initial_folder_language_choice_applies_to_every_file_without_scope_prom
             assert [item.language for item in app.state.queue] == ["ar", "ar"]
 
     asyncio.run(run())
+
+
+def test_multi_file_tui_uses_resolved_language_without_startup_picker(tmp_path):
+    media_paths = []
+    for name in ("episode-01.mkv", "episode-02.mkv"):
+        path = tmp_path / name
+        path.touch()
+        media_paths.append(str(path))
+    app = SubsApp(
+        config={
+            "general": {
+                "preferred_backend": "subdl",
+                "skip_interactive_menu": False,
+                "default_language": "fr",
+            },
+            "subdl": {
+                "api_key": "configured",
+                "languages": {"English": "en", "French": "fr"},
+            },
+        },
+        media_paths=media_paths,
+        overrides={},
+        coordinator=FakeCoordinator([]),
+        language_resolution=("fr", "config"),
+    )
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert not isinstance(app.screen, LanguagePopover)
+            assert [item.language for item in app.state.queue] == ["fr", "fr"]
+
+    asyncio.run(run())
+
+
+def test_single_file_tui_prompts_to_confirm_resolved_language(tmp_path):
+    media = tmp_path / "movie.mkv"
+    media.touch()
+    app = SubsApp(
+        config={
+            "general": {
+                "preferred_backend": "subdl",
+                "skip_interactive_menu": False,
+                "default_language": "fr",
+            },
+            "subdl": {
+                "api_key": "configured",
+                "languages": {"English": "en", "French": "fr"},
+            },
+        },
+        media_paths=[str(media)],
+        overrides={},
+        coordinator=FakeCoordinator([]),
+        language_resolution=("fr", "config"),
+    )
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert isinstance(app.screen, LanguagePopover)
+            assert app.screen.current == "fr"
+
+    asyncio.run(run())
+
+
+def test_whitespace_cli_language_preserves_single_file_config_confirmation(tmp_path):
+    media = tmp_path / "movie.mkv"
+    media.touch()
+    app = SubsApp(
+        config={
+            "general": {
+                "preferred_backend": "subdl",
+                "skip_interactive_menu": False,
+                "default_language": "fr",
+            },
+            "subdl": {
+                "api_key": "configured",
+                "languages": {"English": "en", "French": "fr"},
+            },
+        },
+        media_paths=[str(media)],
+        overrides={"lang": "   ", "backend": None},
+        coordinator=FakeCoordinator([]),
+        language_resolution=("fr", "config"),
+    )
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert isinstance(app.screen, LanguagePopover)
+            assert app.screen.current == "fr"
+            assert app.state.language == "fr"
+
+    asyncio.run(run())
+
+
+def test_single_file_tui_uses_cli_resolved_language_without_startup_picker(tmp_path):
+    media = tmp_path / "movie.mkv"
+    media.touch()
+    app = SubsApp(
+        config={
+            "general": {
+                "preferred_backend": "subdl",
+                "skip_interactive_menu": False,
+            },
+            "subdl": {
+                "api_key": "configured",
+                "languages": {"English": "en", "Arabic": "ar"},
+            },
+        },
+        media_paths=[str(media)],
+        overrides={},
+        coordinator=FakeCoordinator([]),
+        language_resolution=("ar", "cli"),
+    )
+
+    async def run():
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert not isinstance(app.screen, LanguagePopover)
+            assert [item.language for item in app.state.queue] == ["ar"]
+
+    asyncio.run(run())
+
+
+def test_multi_file_tui_rejects_missing_language_before_mount(tmp_path):
+    media_paths = []
+    for name in ("episode-01.mkv", "episode-02.mkv"):
+        path = tmp_path / name
+        path.touch()
+        media_paths.append(str(path))
+
+    with pytest.raises(
+        ValueError,
+        match=r"No language selected\. Use --lang or set general\.default_language\.",
+    ):
+        SubsApp(
+            config={
+                "general": {
+                    "preferred_backend": "subdl",
+                    "skip_interactive_menu": False,
+                },
+                "subdl": {"api_key": "configured", "languages": {}},
+            },
+            media_paths=media_paths,
+            overrides={},
+            coordinator=FakeCoordinator([]),
+            language_resolution=("", "missing"),
+        )
+
+
+def test_tui_batch_missing_language_exits_cleanly_in_subprocess(tmp_path):
+    first = tmp_path / "episode-01.mkv"
+    second = tmp_path / "episode-02.mkv"
+    first.touch()
+    second.touch()
+    script = (
+        "from tui.app import run_tui; "
+        f"run_tui(config={{'general': {{'preferred_backend': 'subdl'}}, "
+        f"'subdl': {{'api_key': 'configured', 'languages': {{}}}}}}, "
+        f"media_paths={[str(first), str(second)]!r}, overrides={{}}, "
+        f"config_path={str(tmp_path / 'missing-config.yaml')!r}, "
+        "language_resolution=('', 'missing'))"
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).parents[2],
+        capture_output=True,
+        text=True,
+    )
+
+    output = completed.stdout + completed.stderr
+    assert completed.returncode == 1
+    assert "No language selected. Use --lang or set general.default_language." in output
+    assert "Traceback" not in output
 
 
 def test_query_submit_uses_edited_value(configured_app):
@@ -768,7 +1206,7 @@ def test_config_draft_survives_refresh_and_blocks_accidental_navigation(
             ads.value = "draft-ads.txt"
             original_engine = app.state.engine_mode
             original_language = app.state.language
-            app._engine_chosen((EngineMode.AUTO, False))
+            app._engine_chosen(EngineMode.AUTO)
             app._language_provider_scope = {Provider.SUBDL}
             app._language_chosen(("fr", "all"))
             await pilot.pause()
@@ -776,7 +1214,6 @@ def test_config_draft_survives_refresh_and_blocks_accidental_navigation(
             assert app.state.engine_mode is original_engine
             assert app.state.language == original_language
             assert app.config_draft.general.preferred_backend is EngineMode.AUTO
-            assert app.config_draft.general.merge_results is False
             assert app.config_draft_language == "fr"
 
             app.notice = "background update"
@@ -810,7 +1247,7 @@ def test_confirmed_config_save_applies_engine_and_language_draft(
         async with app.run_test() as pilot:
             await pilot.pause(0.2)
             await pilot.press("f4")
-            app._engine_chosen((EngineMode.AUTO, False))
+            app._engine_chosen(EngineMode.AUTO)
             app._language_provider_scope = {Provider.SUBDL}
             app._language_chosen(("fr", "all"))
 
@@ -852,7 +1289,7 @@ def test_failed_config_write_keeps_live_state_and_dirty_draft(
             await pilot.pause(0.2)
             original_engine = app.state.engine_mode
             await pilot.press("f4")
-            app._engine_chosen((EngineMode.AUTO, False))
+            app._engine_chosen(EngineMode.AUTO)
             await pilot.press("ctrl+s")
             await pilot.pause()
             await pilot.press("enter")

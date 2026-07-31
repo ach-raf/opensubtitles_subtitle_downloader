@@ -4,6 +4,8 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal
 from textual.widgets import Button, Static
 
+from tui.domain import EngineMode
+
 
 class TopBar(Horizontal):
     def compose(self) -> ComposeResult:
@@ -43,7 +45,7 @@ class TopBar(Horizontal):
         mode = app.state.engine_mode
         engine_label = (
             "All providers"
-            if app.merge_mode
+            if mode is EngineMode.ALL_PROVIDERS
             else "Choose engine" if mode.value == "ask" else mode.label
         )
         self.query_one("#chip-engine", Button).label = (
@@ -54,7 +56,7 @@ class TopBar(Horizontal):
         )
         provider = mode.provider
         health = app.health.get(provider) if provider else None
-        if app.merge_mode:
+        if mode is EngineMode.ALL_PROVIDERS:
             health_label = "ALL · LIVE"
         elif health is None:
             health_label = f"{mode.label.upper()} · READY"

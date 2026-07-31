@@ -54,10 +54,14 @@ class JobCoordinator:
         *,
         cleaner: Any | None = None,
         synchronizer: Any | None = None,
+        output_directory: str | Path | None = None,
     ) -> None:
         self.adapters = adapters
         self.cleaner = cleaner or SubtitleCleaner()
         self.synchronizer = synchronizer or SubtitleSynchronizer()
+        self.output_directory = (
+            Path(output_directory) if output_directory is not None else None
+        )
 
     def download(
         self,
@@ -75,7 +79,18 @@ class JobCoordinator:
                 error=f"{candidate.provider.label} is not configured",
             )
 
-        expected_target = media.with_name(f"{media.stem}.{candidate.language}.srt")
+        destination = self.output_directory or media.parent
+        if self.output_directory is not None:
+            try:
+                destination.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                return DownloadResult(
+                    provider=candidate.provider,
+                    media_path=media,
+                    error=f"Could not create subtitle output directory: {exc}",
+                )
+
+        expected_target = destination / f"{media.stem}.{candidate.language}.srt"
         if expected_target.exists() and not overwrite:
             return DownloadResult(
                 provider=candidate.provider,
@@ -83,9 +98,32 @@ class JobCoordinator:
                 conflict_path=expected_target,
             )
 
+        try:
+            return self._stage_download(
+                adapter,
+                candidate,
+                media,
+                destination,
+                overwrite,
+            )
+        except OSError as exc:
+            return DownloadResult(
+                provider=candidate.provider,
+                media_path=media,
+                error=f"Could not write subtitle output: {exc}",
+            )
+
+    @staticmethod
+    def _stage_download(
+        adapter: ProviderAdapter,
+        candidate: Candidate,
+        media: Path,
+        destination: Path,
+        overwrite: bool,
+    ) -> DownloadResult:
         with TemporaryDirectory(
             prefix=".subtitle-download-",
-            dir=media.parent,
+            dir=destination,
         ) as temporary:
             staging_media = Path(temporary) / media.name
             staged = adapter.download(candidate, staging_media)
@@ -104,7 +142,7 @@ class JobCoordinator:
                     error="Provider wrote outside the download staging directory",
                 )
 
-            target = media.parent / staged_path.name
+            target = destination / staged_path.name
             if target.exists() and not overwrite:
                 return DownloadResult(
                     provider=candidate.provider,

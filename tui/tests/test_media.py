@@ -17,6 +17,23 @@ def test_expand_media_paths_expands_directories_non_recursively(tmp_path):
     assert ignored not in result.paths
 
 
+def test_expand_media_paths_recurses_when_requested(tmp_path):
+    first = tmp_path / "A Movie" / "first.mkv"
+    second = tmp_path / "B Movie" / "deeper" / "second.mp4"
+    first.parent.mkdir()
+    second.parent.mkdir(parents=True)
+    first.touch()
+    second.touch()
+
+    result = expand_media_paths(
+        [tmp_path],
+        {"mkv", "mp4"},
+        recursive=True,
+    )
+
+    assert result.paths == [first.resolve(), second.resolve()]
+
+
 def test_expand_media_paths_reports_unsupported_input(tmp_path):
     note = tmp_path / "notes.txt"
     note.touch()

@@ -1,10 +1,13 @@
-general:
-  preferred_backend: ask # Options: opensubtitles, subdl, subsource, auto, ask
+general: # Explicit CLI options override these settings for one run.
+  preferred_backend: ask # Options: opensubtitles, subdl, subsource, auto, all-providers, ask
+  default_language: "" # ISO code. Blank uses the selected provider's first configured language.
+  recursive_search: false # Recursively discover video files under folder inputs.
+  subtitle_output_directory: "" # Empty saves beside each video. Relative paths resolve from this config file.
   skip_interactive_menu: false # Options: true, false
   sync_audio_to_subs: ask # Options: true, false, ask
   auto_selection: false
   opt_force_utf8: true
-  no_tui: false # Options: true, false. The Textual TUI is the default; set true to always use the legacy numbered-prompt CLI instead (for headless / Send-To batch use). Override per-run with --tui / --no-tui.
+  no_tui: false # Options: true, false. The Textual TUI is the default; set true for the noninteractive/headless CLI (including Send-To batch use). Override per-run with --tui / --no-tui.
   hearing_impaired: include # Options: include, exclude, only
   show_ai_translated: true
 

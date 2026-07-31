@@ -51,13 +51,13 @@ class BarrierAdapter(FakeAdapter):
         return super().search(request)
 
 
-def test_merge_retains_same_raw_id_from_all_providers():
+def test_all_providers_retains_same_raw_id_from_every_provider():
     adapters = {
         provider: FakeAdapter(provider, [candidate(provider, "42")])
         for provider in Provider
     }
 
-    result = SearchCoordinator(adapters).merge(REQUEST)
+    result = SearchCoordinator(adapters).all_providers(REQUEST)
 
     assert {item.key for item in result.candidates} == {
         "opensubtitles:42",
@@ -66,7 +66,7 @@ def test_merge_retains_same_raw_id_from_all_providers():
     }
 
 
-def test_merge_retains_successes_and_reports_partial_failure():
+def test_all_providers_retains_successes_and_reports_partial_failure():
     adapters = {
         Provider.OPENSUBTITLES: FakeAdapter(
             Provider.OPENSUBTITLES, error="network down"
@@ -74,17 +74,17 @@ def test_merge_retains_successes_and_reports_partial_failure():
         Provider.SUBDL: FakeAdapter(Provider.SUBDL, [candidate(Provider.SUBDL, "1")]),
     }
 
-    result = SearchCoordinator(adapters).merge(REQUEST)
+    result = SearchCoordinator(adapters).all_providers(REQUEST)
 
     assert [item.key for item in result.candidates] == ["subdl:1"]
     assert result.errors[Provider.OPENSUBTITLES] == "network down"
 
 
-def test_merge_runs_provider_calls_concurrently():
+def test_all_providers_runs_provider_calls_concurrently():
     gate = threading.Barrier(3)
     adapters = {provider: BarrierAdapter(provider, gate) for provider in Provider}
 
-    result = SearchCoordinator(adapters).merge(REQUEST)
+    result = SearchCoordinator(adapters).all_providers(REQUEST)
 
     assert len(result.candidates) == 3
 
@@ -110,7 +110,7 @@ def test_health_does_not_exclude_a_working_provider():
         )
     }
 
-    result = SearchCoordinator(adapters).merge(
+    result = SearchCoordinator(adapters).all_providers(
         REQUEST,
         health={
             Provider.OPENSUBTITLES: HealthResult(
@@ -144,6 +144,6 @@ def test_shared_filters_apply_to_all_providers():
         show_ai_translated=False,
     )
 
-    result = SearchCoordinator(adapters).merge(request)
+    result = SearchCoordinator(adapters).all_providers(request)
 
     assert [item.key for item in result.candidates] == ["opensubtitles:normal"]

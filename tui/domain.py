@@ -26,6 +26,7 @@ class Provider(StrEnum):
 class EngineMode(StrEnum):
     ASK = "ask"
     AUTO = "auto"
+    ALL_PROVIDERS = "all-providers"
     OPENSUBTITLES = "opensubtitles"
     SUBDL = "subdl"
     SUBSOURCE = "subsource"
@@ -39,6 +40,8 @@ class EngineMode(StrEnum):
 
     @property
     def label(self) -> str:
+        if self is EngineMode.ALL_PROVIDERS:
+            return "All providers"
         return self.provider.label if self.provider else self.value.title()
 
 

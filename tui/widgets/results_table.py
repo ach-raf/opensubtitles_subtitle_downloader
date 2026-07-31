@@ -17,15 +17,15 @@ class ResultsTable(DataTable):
         self._number_buffer = ""
         self._number_buffer_timer = None
         self._rendered_signature: tuple | None = None
-        self._rendered_merge_mode: bool | None = None
+        self._rendered_all_providers_mode: bool | None = None
 
     def on_mount(self) -> None:
-        self._set_columns(merge_mode=False)
+        self._set_columns(all_providers_mode=False)
 
     def refresh_from_state(self, app) -> None:
-        if self._rendered_merge_mode is not app.merge_mode:
+        if self._rendered_all_providers_mode is not app.all_providers_mode:
             self.clear(columns=True)
-            self._set_columns(app.merge_mode)
+            self._set_columns(app.all_providers_mode)
             self._rendered_signature = None
         signature = tuple(
             (
@@ -61,7 +61,7 @@ class ResultsTable(DataTable):
                 _count(candidate.download_count),
                 _score(candidate.score),
             ]
-            if app.merge_mode:
+            if app.all_providers_mode:
                 cells.insert(2, f" {candidate.provider.label}")
             self.add_row(*cells, key=candidate.key)
         self._rendered_signature = signature
@@ -96,16 +96,16 @@ class ResultsTable(DataTable):
         self._number_buffer = ""
         self._number_buffer_timer = None
 
-    def _set_columns(self, merge_mode: bool) -> None:
+    def _set_columns(self, all_providers_mode: bool) -> None:
         self.add_column("#", width=4)
-        self.add_column("Release", width=62 if merge_mode else 71)
+        self.add_column("Release", width=62 if all_providers_mode else 71)
         self.add_column("L", width=2)
-        if merge_mode:
+        if all_providers_mode:
             self.add_column("Source", width=9)
         self.add_column("Flags", width=6)
         self.add_column("D/L", width=5)
         self.add_column("Match", width=5)
-        self._rendered_merge_mode = merge_mode
+        self._rendered_all_providers_mode = all_providers_mode
 
 
 def _count(value: int) -> str:

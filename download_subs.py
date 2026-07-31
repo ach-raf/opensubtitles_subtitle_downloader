@@ -2,10 +2,13 @@ import argparse
 import os
 import sys
 from enum import Enum
+from pathlib import Path
 
 import yaml
 from rich.console import Console
 from rich.table import Table
+
+from tui.media import MEDIA_EXTENSIONS, expand_media_paths
 
 console = Console()
 
@@ -14,13 +17,79 @@ class SubtitleBackend(Enum):
     OPENSUBTITLES = "opensubtitles"
     SUBDL = "subdl"
     SUBSOURCE = "subsource"
+    ALL_PROVIDERS = "all-providers"
     AUTO = "auto"
     ASK = "ask"
 
 
+def _resolve_backend(
+    cli_backend: str | None,
+    config: dict,
+) -> SubtitleBackend:
+    cli_value = str(cli_backend or "").strip().lower()
+    if cli_value:
+        return SubtitleBackend(cli_value)
+
+    general = config.get("general", {}) or {}
+    configured_value = str(
+        general.get("preferred_backend", SubtitleBackend.ASK.value)
+    ).strip().lower()
+    try:
+        return SubtitleBackend(configured_value)
+    except ValueError:
+        console.print(
+            "[bold red]Warning: Invalid backend in config: "
+            f"{configured_value}. Using 'ask' instead.[/]"
+        )
+        return SubtitleBackend.ASK
+
+
+def _resolve_language(
+    cli_language: str | None,
+    config: dict,
+    backend: SubtitleBackend,
+) -> tuple[str, str]:
+    cli_value = str(cli_language or "").strip().lower()
+    if cli_value:
+        return cli_value, "cli"
+
+    config_value = str(
+        (config.get("general", {}) or {}).get("default_language", "") or ""
+    ).strip().lower()
+    if config_value:
+        return config_value, "config"
+
+    if backend == SubtitleBackend.ALL_PROVIDERS:
+        provider_sections = ("opensubtitles", "subdl", "subsource")
+    elif backend == SubtitleBackend.SUBDL:
+        provider_sections = ("subdl",)
+    elif backend == SubtitleBackend.SUBSOURCE:
+        provider_sections = ("subsource",)
+    else:
+        provider_sections = ("opensubtitles",)
+    for provider_section in provider_sections:
+        languages = (
+            (config.get(provider_section, {}) or {}).get("languages", {}) or {}
+        )
+        provider_value = str(
+            next(iter(languages.values()), "") or ""
+        ).strip().lower()
+        if provider_value:
+            return provider_value, "provider"
+    return "", "missing"
+
+
 class SubtitleDownloader:
-    def __init__(self, config_path: str):
+    def __init__(
+        self,
+        config_path: str,
+        *,
+        output_directory: str | Path | None = None,
+    ):
         self.config = self._read_config_file(config_path)
+        self.output_directory = (
+            Path(output_directory) if output_directory is not None else None
+        )
         self.opensubtitles_client = None
         self.subdl_client = None
         self.subsource_client = None
@@ -51,6 +120,7 @@ class SubtitleDownloader:
                         "sync_audio_to_subs", False
                     ),
                     auto_select=self.config["general"].get("auto_selection", False),
+                    output_directory=self.output_directory,
                 )
             except KeyError as e:
                 console.print(
@@ -70,6 +140,7 @@ class SubtitleDownloader:
                     ),
                     hearing_impaired=False,
                     auto_select=self.config["general"].get("auto_selection", False),
+                    output_directory=self.output_directory,
                 )
             except KeyError as e:
                 console.print(f"[bold red]Error: Missing key in subdl config: {e}[/]")
@@ -87,6 +158,7 @@ class SubtitleDownloader:
                     ),
                     hearing_impaired=False,
                     auto_select=self.config["general"].get("auto_selection", False),
+                    output_directory=self.output_directory,
                 )
             except KeyError as e:
                 console.print(
@@ -205,7 +277,11 @@ class SubtitleDownloader:
                 f"{len(media_paths)} files[/]"
             )
             if self.opensubtitles_client:
-                self.opensubtitles_client.process_media_list(media_paths, language)
+                self._process_media_files(
+                    self.opensubtitles_client,
+                    media_paths,
+                    language,
+                )
             else:
                 console.print(
                     "[bold red]OpenSubtitles client initialization failed.[/]"
@@ -216,7 +292,7 @@ class SubtitleDownloader:
                 f"[bold blue]Using SubDL backend for {len(media_paths)} files[/]"
             )
             if self.subdl_client:
-                self.subdl_client.process_media_list(media_paths, language)
+                self._process_media_files(self.subdl_client, media_paths, language)
             else:
                 console.print("[bold red]SubDL client initialization failed.[/]")
         elif chosen_backend == SubtitleBackend.SUBSOURCE:
@@ -225,11 +301,20 @@ class SubtitleDownloader:
                 f"[bold blue]Using SubSource backend for {len(media_paths)} files[/]"
             )
             if self.subsource_client:
-                self.subsource_client.process_media_list(media_paths, language)
+                self._process_media_files(
+                    self.subsource_client,
+                    media_paths,
+                    language,
+                )
             else:
                 console.print("[bold red]SubSource client initialization failed.[/]")
         else:
             console.print("[bold red]Invalid backend selected.[/]")
+
+    @staticmethod
+    def _process_media_files(client, media_paths: list[str], language: str) -> None:
+        for media_path in media_paths:
+            client.process_media_file(media_path, language)
 
     def _show_language_menu(self, languages: dict[str, str]) -> str:
         if not languages:
@@ -286,51 +371,133 @@ class SubtitleDownloader:
             return SubtitleBackend.ASK
 
 
-def run_legacy(config_path: str, media_paths: list[str]) -> None:
-    """The original numbered-prompt CLI flow, preserved behind --no-tui.
+def _build_headless_all_providers_runner(
+    config_path: str,
+    *,
+    output_directory: str | Path | None = None,
+    output_directory_overridden: bool = False,
+):
+    """Build the typed all-provider runner without loading it on TUI startup."""
+    from tui.config import ConfigRepository
+    from tui.headless import HeadlessAllProvidersRunner
+    from tui.providers.factory import create_adapters
 
-    This is the exact pre-TUI behaviour: read config, build a SubtitleDownloader,
-    show the numbered menus (or honor skip_interactive_menu), and download.
+    config = ConfigRepository(config_path).load()
+    if output_directory_overridden or output_directory is not None:
+        config.general.subtitle_output_directory = (
+            str(output_directory) if output_directory is not None else ""
+        )
+    adapters = create_adapters(config)
+    return HeadlessAllProvidersRunner(
+        config,
+        adapters,
+        emit=console.print,
+    )
+
+
+def run_legacy(
+    config_path: str,
+    media_paths: list[str],
+    *,
+    backend: SubtitleBackend | None = None,
+    recursive: bool = False,
+    output_directory: str | Path | None = None,
+    output_directory_overridden: bool = False,
+    resolved_language: tuple[str, str] | None = None,
+) -> None:
+    """Run the non-TUI subtitle download flow.
+
+    Read config, resolve startup options, and download without opening menus.
     """
     try:
-        downloader = SubtitleDownloader(config_path)
+        downloader = SubtitleDownloader(
+            config_path,
+            output_directory=output_directory,
+        )
     except SystemExit:
+        sys.exit(1)
+
+    backend = backend or downloader._get_backend_from_config()
+    headless_runner = None
+    if backend is SubtitleBackend.ALL_PROVIDERS:
+        headless_runner = _build_headless_all_providers_runner(
+            config_path,
+            output_directory=output_directory,
+            output_directory_overridden=output_directory_overridden,
+        )
+    language_resolution = (
+        resolved_language
+        if resolved_language is not None
+        else _resolve_language(None, downloader.config, backend)
+    )
+    language, _source = language_resolution
+    if not language:
+        if headless_runner is not None and not headless_runner.adapters:
+            summary = headless_runner.run([], language)
+            console.print(
+                "Batch summary: "
+                f"attempted={summary.attempted}, "
+                f"succeeded={summary.succeeded}, "
+                f"failed={summary.failed}"
+            )
+            raise SystemExit(summary.exit_code)
+        console.print(
+            "[bold red]Error: No language selected. Use --lang or set "
+            "general.default_language.[/]"
+        )
         sys.exit(1)
 
     if not media_paths:
         console.print("[bold red]Error: No media paths provided. Exiting...[/]")
         sys.exit(1)
 
-    if downloader.config.get("general", {}).get("skip_interactive_menu", False):
-        backend = downloader._get_backend_from_config()
-        # Pick the language block matching the configured backend.
-        if backend == SubtitleBackend.SUBDL:
-            source_section = "subdl"
-        elif backend == SubtitleBackend.SUBSOURCE:
-            source_section = "subsource"
-        else:
-            # OPENSUBTITLES, AUTO, ASK all fall back to the opensubtitles languages.
-            source_section = "opensubtitles"
-        languages_map = (
-            downloader.config.get(source_section, {}).get("languages", {}) or {}
+    expansion = expand_media_paths(
+        media_paths,
+        MEDIA_EXTENSIONS,
+        recursive=recursive,
+    )
+    media_paths = [str(path) for path in expansion.paths]
+    if not media_paths:
+        console.print("[bold red]Error: No supported media files found. Exiting...[/]")
+        sys.exit(1)
+    if output_directory is not None:
+        seen_stems: set[str] = set()
+        duplicate_stems: set[str] = set()
+        for media_path in media_paths:
+            stem = Path(media_path).stem.casefold()
+            if stem in seen_stems:
+                duplicate_stems.add(Path(media_path).stem)
+            seen_stems.add(stem)
+        if duplicate_stems:
+            names = ", ".join(sorted(duplicate_stems, key=str.casefold))
+            console.print(
+                "[bold red]Error: Flat subtitle output would overwrite files for "
+                f"duplicate media names: {names}[/]"
+            )
+            sys.exit(1)
+
+    if headless_runner is not None:
+        summary = headless_runner.run(
+            [Path(path) for path in media_paths],
+            language,
         )
-        language = list(languages_map.values())[0] if languages_map else ""
-        if not language:
-            console.print("[bold red]Error: No languages defined in config.[/]")
-            sys.exit(1)
-    else:
-        backend, language = downloader.interactive_menu()
-        if not language:
-            sys.exit(1)
+        console.print(
+            "Batch summary: "
+            f"attempted={summary.attempted}, "
+            f"succeeded={summary.succeeded}, "
+            f"failed={summary.failed}"
+        )
+        if summary.exit_code:
+            raise SystemExit(summary.exit_code)
+        return
 
     downloader.download_subtitles(media_paths, language, backend)
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
-    """Parse argv into media paths + the initial overrides that seed the TUI.
+    """Parse media paths and per-run command-line overrides.
 
     Positional args are media paths (preserving the pre-TUI call shape).
-    Flags only take effect when the TUI runs; the legacy path is unchanged.
     """
     parser = argparse.ArgumentParser(
         prog="download_subs.py",
@@ -352,20 +519,65 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-tui",
         action="store_true",
-        help="Force the legacy numbered-prompt CLI (the pre-TUI behaviour).",
+        help="Run the noninteractive/headless CLI without the Textual TUI.",
     )
     parser.add_argument(
         "--lang",
         default=None,
-        help="Seed the TUI with an ISO language code (e.g. 'en', 'ar').",
+        help="Use this ISO language code in TUI, batch, and no-TUI modes.",
     )
     parser.add_argument(
         "--backend",
         default=None,
-        choices=["opensubtitles", "subdl", "subsource", "auto", "ask"],
-        help="Seed the TUI with a subtitle backend.",
+        choices=[backend.value for backend in SubtitleBackend],
+        help="Use this subtitle backend for this run.",
+    )
+    parser.add_argument(
+        "--recursive",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Recursively discover video files in folders.",
+    )
+    output_group = parser.add_mutually_exclusive_group()
+    output_group.add_argument(
+        "--output-dir",
+        default=None,
+        help="Save subtitles in this directory for this run.",
+    )
+    output_group.add_argument(
+        "--output-next-to-media",
+        action="store_true",
+        help="Ignore a configured output directory for this run.",
     )
     return parser
+
+
+def _resolve_path_options(
+    args: argparse.Namespace,
+    config: dict,
+    config_path: str | Path,
+) -> tuple[bool, Path | None]:
+    general = config.get("general", {}) or {}
+    recursive = (
+        bool(general.get("recursive_search", False))
+        if args.recursive is None
+        else bool(args.recursive)
+    )
+
+    if args.output_next_to_media:
+        output_directory = None
+    elif args.output_dir is not None:
+        output_directory = Path(args.output_dir).resolve()
+    else:
+        configured = str(general.get("subtitle_output_directory", "") or "").strip()
+        if not configured:
+            output_directory = None
+        else:
+            output_directory = Path(configured)
+            if not output_directory.is_absolute():
+                output_directory = Path(config_path).resolve().parent / output_directory
+            output_directory = output_directory.resolve()
+    return recursive, output_directory
 
 
 def main() -> None:
@@ -376,13 +588,13 @@ def main() -> None:
     args = parser.parse_args()
     media_paths: list[str] = list(args.paths)
 
-    # Read config once so we can honor general.no_tui AND seed the TUI.
+    # Read config once so we can honor general.no_tui and per-run overrides.
     config: dict = {}
     try:
         with open(CONFIG_FILE_PATH, encoding="utf-8") as fh:
             config = yaml.safe_load(fh) or {}
     except FileNotFoundError:
-        # Config missing — fall back to the legacy CLI which prints its own
+        # Config missing — fall back to the headless CLI which prints its own
         # error (preserving the pre-TUI behaviour).
         run_legacy(CONFIG_FILE_PATH, media_paths)
         return
@@ -390,10 +602,18 @@ def main() -> None:
         console.print(f"[bold red]Error: Invalid YAML in config file: {exc}[/]")
         sys.exit(1)
 
+    recursive_search, output_directory = _resolve_path_options(
+        args,
+        config,
+        CONFIG_FILE_PATH,
+    )
+    backend = _resolve_backend(args.backend, config)
+    language_resolution = _resolve_language(args.lang, config, backend)
+
     # Phase 6: the TUI is now the DEFAULT. Escape hatches:
     #   --no-tui flag, or general.no_tui: true in config.yaml.
     #   --tui overrides general.no_tui (explicit user intent wins).
-    #   (The legacy numbered-menu CLI is still fully functional behind these.)
+    #   The headless CLI is selected by either no-TUI setting.
     config_no_tui = bool(config.get("general", {}).get("no_tui", False))
     if args.no_tui:
         use_tui = False
@@ -403,7 +623,17 @@ def main() -> None:
         use_tui = not config_no_tui
 
     if not use_tui:
-        run_legacy(CONFIG_FILE_PATH, media_paths)
+        run_legacy(
+            CONFIG_FILE_PATH,
+            media_paths,
+            backend=backend,
+            recursive=recursive_search,
+            output_directory=output_directory,
+            output_directory_overridden=(
+                args.output_next_to_media or args.output_dir is not None
+            ),
+            resolved_language=language_resolution,
+        )
         return
 
     # --- TUI path ---
@@ -414,12 +644,18 @@ def main() -> None:
         console.print("[bold red]Error: No media paths provided. Exiting...[/]")
         sys.exit(1)
 
-    overrides = {"lang": args.lang, "backend": args.backend}
+    overrides = {
+        "lang": language_resolution[0] if language_resolution[1] == "cli" else None,
+        "backend": args.backend,
+    }
     run_tui(
         config=config,
         media_paths=media_paths,
         overrides=overrides,
         config_path=CONFIG_FILE_PATH,
+        recursive_search=recursive_search,
+        output_directory=output_directory,
+        language_resolution=language_resolution,
     )
 
 

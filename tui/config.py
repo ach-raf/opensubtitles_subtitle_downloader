@@ -17,7 +17,9 @@ from tui.domain import EngineMode, Provider
 
 SUPPORTED_GENERAL_FIELDS = {
     "preferred_backend",
-    "merge_results",
+    "default_language",
+    "recursive_search",
+    "subtitle_output_directory",
     "skip_interactive_menu",
     "sync_audio_to_subs",
     "auto_selection",
@@ -32,7 +34,9 @@ SECRET_FIELDS = {"username", "password", "api_key", "user_agent"}
 @dataclass
 class GeneralConfig:
     preferred_backend: EngineMode = EngineMode.ASK
-    merge_results: bool = False
+    default_language: str = ""
+    recursive_search: bool = False
+    subtitle_output_directory: str = ""
     skip_interactive_menu: bool = False
     sync_audio_to_subs: str = "ask"
     auto_selection: bool = False
@@ -146,11 +150,18 @@ class ConfigRepository:
         self._loaded_raw = copy.deepcopy(raw)
 
         general_raw = raw.get("general") or {}
+        preferred_backend = _safe_mode(
+            general_raw.get("preferred_backend", EngineMode.ASK.value)
+        )
         general = GeneralConfig(
-            preferred_backend=_safe_mode(
-                general_raw.get("preferred_backend", EngineMode.ASK.value)
-            ),
-            merge_results=bool(general_raw.get("merge_results", False)),
+            preferred_backend=preferred_backend,
+            default_language=str(
+                general_raw.get("default_language", "") or ""
+            ).strip().lower(),
+            recursive_search=bool(general_raw.get("recursive_search", False)),
+            subtitle_output_directory=str(
+                general_raw.get("subtitle_output_directory", "")
+            ).strip(),
             skip_interactive_menu=bool(general_raw.get("skip_interactive_menu", False)),
             sync_audio_to_subs=normalize_sync_policy(
                 general_raw.get("sync_audio_to_subs", "ask")
@@ -211,6 +222,7 @@ class ConfigRepository:
         output = copy.deepcopy(self._loaded_raw)
         output.update(copy.deepcopy(config.extra))
         general_output = self._section(output, "general")
+        general_output.pop("merge_results", None)
         for name in SUPPORTED_GENERAL_FIELDS:
             value = getattr(config.general, name)
             if isinstance(value, EngineMode):

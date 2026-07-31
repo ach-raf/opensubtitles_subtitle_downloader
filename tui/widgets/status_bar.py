@@ -34,7 +34,7 @@ class StatusBar(Horizontal):
         done = sum(item.status is QueueStatus.DONE for item in app.state.queue)
         self.query_one("#status-progress", Static).update(
             f"{done}/{len(app.state.queue)} DONE"
-            + (" · MERGE" if app.merge_mode else "")
+            + (" · ALL PROVIDERS" if app.all_providers_mode else "")
         )
         general = app.application_config.general
         clean = "✓" if app.application_config.cleaning.enabled else "off"

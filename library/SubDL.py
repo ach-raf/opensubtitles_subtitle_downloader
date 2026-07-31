@@ -26,17 +26,27 @@ class SubDL:
         sync_audio_to_subs=False,
         hearing_impaired=False,
         auto_select=True,
+        output_directory=None,
     ):
         self.api_key = api_key
         self.sync_audio_to_subs = sync_audio_to_subs
         self.hearing_impaired = hearing_impaired
         self.auto_select = auto_select
+        self.output_directory = (
+            Path(output_directory) if output_directory is not None else None
+        )
         self.api_base_url = "https://api.subdl.com/api/v2"
         self.download_base_url = "https://dl.subdl.com"
         self.console = Console()
         self.subtitle_utils = SubtitleUtils()
         self.standardize_subtitle_objects = None
         self._last_request_error = None
+
+    def _output_path(self, media_path, filename):
+        directory = self.output_directory or Path(media_path).parent
+        if self.output_directory is not None:
+            directory.mkdir(parents=True, exist_ok=True)
+        return directory / filename
 
     def _request(self, path, params):
         """GET a v2 endpoint with Bearer auth and return parsed JSON."""
@@ -295,7 +305,10 @@ class SubDL:
         target_filename = self._target_subtitle_name(
             video_input_path, language_choice, ext
         )
-        target_path = video_input_path.parent / target_filename
+        target_path = self._output_path(video_input_path, target_filename)
+        if self.output_directory is not None and target_path.exists():
+            self.console.print(f"[bold red]Subtitle already exists: {target_path}[/]")
+            return None
         decoded = self._decode_bytes(response.content)
         with open(target_path, "w", encoding="utf-8") as f:
             f.write(decoded)
@@ -316,7 +329,10 @@ class SubDL:
         abs_url = self._download_url(rel_url)
         response = requests.get(abs_url, stream=True, timeout=10)
         response.raise_for_status()
-        zip_path = video_input_path.with_suffix(".zip")
+        zip_path = self._output_path(
+            video_input_path,
+            f"{video_input_path.stem}.zip",
+        )
         with open(zip_path, "wb") as f:
             for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
@@ -375,8 +391,9 @@ class SubDL:
                                 if subtitle_file.endswith(".ass")
                                 else fallback_filename
                             )
-                            selected_subtitle_path = (
-                                video_input_path.parent / target_filename
+                            selected_subtitle_path = self._output_path(
+                                video_input_path,
+                                target_filename,
                             )
                         else:
                             original_name = Path(subtitle_file).stem
@@ -385,7 +402,17 @@ class SubDL:
                                 f"{original_name}.{language_choice}{extension}"
                             )
 
-                        target_path = video_input_path.parent / target_filename
+                        target_path = self._output_path(
+                            video_input_path,
+                            target_filename,
+                        )
+                        if self.output_directory is not None and target_path.exists():
+                            if target_path == selected_subtitle_path:
+                                selected_subtitle_path = None
+                            self.console.print(
+                                f"[bold red]Subtitle already exists: {target_path}[/]"
+                            )
+                            continue
                         with open(target_path, "w", encoding="utf-8") as target:
                             target.write(decoded_content)
                         self.console.print(

@@ -1,4 +1,4 @@
-"""Concurrent merge and legacy-compatible AUTO search coordination."""
+"""Concurrent all-provider and fallback AUTO search coordination."""
 
 from __future__ import annotations
 
@@ -64,7 +64,7 @@ class SearchCoordinator:
             selected_provider=provider if result.candidates else None,
         )
 
-    def merge(
+    def all_providers(
         self,
         request: SearchRequest,
         health: dict[Provider, HealthResult] | None = None,

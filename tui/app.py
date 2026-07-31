@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import sys
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
@@ -45,7 +46,7 @@ from tui.domain import (
 )
 from tui.jobs import JobCoordinator
 from tui.keymap import Action, Keymap
-from tui.media import expand_media_paths
+from tui.media import MEDIA_EXTENSIONS, expand_media_paths
 from tui.providers import create_adapters
 from tui.search import CoordinatedSearchResult, SearchCoordinator
 from tui.state import SessionState, native_name
@@ -58,7 +59,6 @@ from tui.widgets.status_bar import StatusBar
 from tui.widgets.topbar import TopBar
 from tui.widgets.views import ConfigView, HistoryView, QueueView, SearchView
 
-MEDIA_EXTENSIONS = {"avi", "m4v", "mkv", "mov", "mp4", "ts", "webm"}
 WIDE_LAYOUT_MIN_WIDTH = 140
 
 
@@ -427,7 +427,7 @@ class SubsApp(App):
         Binding("enter", "download_cursor", "Download", show=False),
         Binding("p", "preview", "Preview", show=False),
         Binding("y", "copy_url", "Copy URL", show=False),
-        Binding("m", "toggle_merge", "Merge", show=False),
+        Binding("m", "toggle_all_providers", "All providers", show=False),
         Binding("r", "reprobe", "Re-probe", show=False),
         Binding("ctrl+k", "open_palette", "Commands", show=False),
         Binding("ctrl+s", "save_config", "Save config", show=False),
@@ -439,7 +439,7 @@ class SubsApp(App):
     candidates: reactive[list[Candidate]] = reactive(list, layout=False)
     cursor_index: reactive[int] = reactive(0, layout=False)
     query: reactive[str] = reactive("", layout=False)
-    merge_mode: reactive[bool] = reactive(False, layout=False)
+    all_providers_mode: reactive[bool] = reactive(False, layout=False)
     searching: reactive[bool] = reactive(False, layout=False)
     downloading: reactive[bool] = reactive(False, layout=False)
     last_error: reactive[str | None] = reactive(None, layout=False)
@@ -458,10 +458,14 @@ class SubsApp(App):
         *,
         coordinator: SearchCoordinator | None = None,
         jobs: JobCoordinator | None = None,
+        recursive_search: bool = False,
+        output_directory: str | Path | None = None,
+        language_resolution: tuple[str, str] | None = None,
     ) -> None:
         super().__init__()
         self.raw_config = copy.deepcopy(config or {})
         self.overrides = overrides or {}
+        self.language_resolution = language_resolution
         self.config_path = Path(config_path) if config_path else None
         self.config_repository = ConfigRepository(
             self.config_path or Path("config.yaml")
@@ -475,16 +479,30 @@ class SubsApp(App):
             self._overlay_raw_config(self.raw_config)
         self._apply_overrides()
         self.set_reactive(
-            SubsApp.merge_mode,
-            self.application_config.general.merge_results,
+            SubsApp.all_providers_mode,
+            self.application_config.general.preferred_backend
+            is EngineMode.ALL_PROVIDERS,
         )
+        self._engine_before_all: EngineMode | None = None
         self.config_draft = copy.deepcopy(self.application_config)
         self.config_draft_language = ""
         self._pending_config_draft: ApplicationConfig | None = None
         self._pending_config_language: str | None = None
         self._after_config_save: Callable[[], None] | None = None
 
-        expansion = expand_media_paths(media_paths or [], MEDIA_EXTENSIONS)
+        expansion = expand_media_paths(
+            media_paths or [],
+            MEDIA_EXTENSIONS,
+            recursive=recursive_search,
+        )
+        if (
+            language_resolution is not None
+            and language_resolution[1] == "missing"
+            and len(expansion.paths) > 1
+        ):
+            raise ValueError(
+                "No language selected. Use --lang or set general.default_language."
+            )
         queue = [
             QueueItem(
                 key=str(path),
@@ -496,8 +514,21 @@ class SubsApp(App):
         ]
         self.media_issues = expansion.issues
         self.state = SessionState.from_config(self.application_config, queue)
-        if language := self.overrides.get("lang"):
-            self.state.set_language(str(language), scope="remaining")
+        if language_resolution is not None:
+            resolved_language, language_source = language_resolution
+            resolved_language = resolved_language.strip().lower()
+            if resolved_language:
+                self.state.language = resolved_language
+                for item in self.state.queue:
+                    item.language = resolved_language
+            self.state.language_confirmed = (
+                self.application_config.general.skip_interactive_menu
+                or language_source == "cli"
+                or len(self.state.queue) > 1
+            )
+        override_language = str(self.overrides.get("lang") or "").strip().lower()
+        if override_language:
+            self.state.set_language(override_language, scope="remaining")
         if engine := self.overrides.get("backend"):
             mode = EngineMode(str(engine))
             if mode is not EngineMode.ASK:
@@ -510,7 +541,10 @@ class SubsApp(App):
             for item in self.state.queue:
                 item.engine_mode = EngineMode.ASK
         self.coordinator = coordinator or SearchCoordinator(self.adapters)
-        self.jobs = jobs or JobCoordinator(self.adapters)
+        self.jobs = jobs or JobCoordinator(
+            self.adapters,
+            output_directory=output_directory,
+        )
         self.keymap = Keymap()
         self._rebuild_keymap()
         self.last_search_request: SearchRequest | None = None
@@ -553,7 +587,9 @@ class SubsApp(App):
     def _overlay_raw_config(self, raw: dict[str, Any]) -> None:
         general = raw.get("general") or {}
         for name in (
-            "merge_results",
+            "default_language",
+            "recursive_search",
+            "subtitle_output_directory",
             "skip_interactive_menu",
             "auto_selection",
             "opt_force_utf8",
@@ -598,13 +634,16 @@ class SubsApp(App):
     def _apply_overrides(self) -> None:
         if backend := self.overrides.get("backend"):
             self.application_config.general.preferred_backend = EngineMode(str(backend))
-            self.application_config.general.merge_results = False
-        if self.overrides.get("lang"):
+        if str(self.overrides.get("lang") or "").strip():
             self.application_config.general.skip_interactive_menu = True
 
     def _initial_language(self) -> str:
-        if language := self.overrides.get("lang"):
-            return str(language).lower()
+        if self.language_resolution is not None:
+            resolved_language, _source = self.language_resolution
+            if normalized := resolved_language.strip().lower():
+                return normalized
+        if language := str(self.overrides.get("lang") or "").strip().lower():
+            return language
         mode = self.application_config.general.preferred_backend
         providers = [mode.provider] if mode.provider else list(Provider)
         for provider in providers:
@@ -639,7 +678,6 @@ class SubsApp(App):
             self.search_generation,
             request,
             self.state.engine_mode,
-            self.merge_mode,
         )
 
     @work(thread=True, exclusive=True, group="search")
@@ -649,11 +687,10 @@ class SubsApp(App):
         generation: int,
         request: SearchRequest,
         mode: EngineMode,
-        merge: bool,
     ) -> None:
         self.call_from_thread(self._search_started, item_key, generation)
-        if merge:
-            result = self.coordinator.merge(request, self.health)
+        if mode is EngineMode.ALL_PROVIDERS:
+            result = self.coordinator.all_providers(request, self.health)
         elif mode is EngineMode.AUTO:
             result = self.coordinator.auto(request, self.health)
         elif mode.provider:
@@ -707,7 +744,7 @@ class SubsApp(App):
         if result.errors:
             self.notice = f"Partial results · {summary}"
         elif not result.candidates:
-            self.notice = "No subtitles found. Try a broader query or Merge."
+            self.notice = "No subtitles found. Try a broader query or All providers."
         else:
             self.notice = f"{len(result.candidates)} candidates ready"
         self._refresh_all()
@@ -794,14 +831,26 @@ class SubsApp(App):
             return
         self.cursor_index = max(0, self.cursor_index - 1)
 
-    def action_toggle_merge(self) -> None:
-        self.merge_mode = not self.merge_mode
+    def action_toggle_all_providers(self) -> None:
+        current = self.state.engine_mode
+        if current is EngineMode.ALL_PROVIDERS:
+            mode = self._engine_before_all or EngineMode.AUTO
+        else:
+            if current is not EngineMode.ASK:
+                self._engine_before_all = current
+            mode = EngineMode.ALL_PROVIDERS
+        self.state.choose_engine(mode)
+        self.application_config.general.preferred_backend = mode
+        self.config_draft.general.preferred_backend = mode
+        self._persist_live_engine_preference()
+        self.all_providers_mode = mode is EngineMode.ALL_PROVIDERS
         self.notice = (
-            "Merge searches all configured providers"
-            if self.merge_mode
-            else "Merge off"
+            "All providers searches every configured provider"
+            if self.all_providers_mode
+            else "All providers off"
         )
         self._refresh_all()
+        self.start_search()
 
     def action_reprobe(self) -> None:
         self.run_health_probe()
@@ -829,7 +878,6 @@ class SubsApp(App):
             EngineSwitcher(
                 current=current,
                 health=self.health,
-                merge_mode=self.merge_mode,
                 configured=set(self.adapters),
             ),
             self._engine_chosen,
@@ -838,23 +886,44 @@ class SubsApp(App):
     def _engine_chosen(self, result) -> None:
         if not result:
             return
-        mode, merge = result
+        mode = result
         if self.state.active_view == "config":
             self.config_draft.general.preferred_backend = mode
-            self.config_draft.general.merge_results = merge
             view = self.query_one(ConfigView)
             view.mark_dirty()
             view.refresh_from_state(self)
             return
-        self.merge_mode = merge
+        current = self.state.engine_mode
+        if (
+            mode is EngineMode.ALL_PROVIDERS
+            and current not in {EngineMode.ASK, EngineMode.ALL_PROVIDERS}
+        ):
+            self._engine_before_all = current
         self.state.choose_engine(mode)
         self.application_config.general.preferred_backend = mode
-        self.application_config.general.merge_results = merge
+        self.config_draft.general.preferred_backend = mode
+        self._persist_live_engine_preference()
+        self.all_providers_mode = mode is EngineMode.ALL_PROVIDERS
         self._refresh_all()
         if self.state.needs_language_setup:
             self.action_open_language()
         else:
             self.start_search()
+
+    def _persist_live_engine_preference(self) -> None:
+        if not self.config_path:
+            return
+        try:
+            persisted_config = self.config_repository.load()
+            persisted_config.general.preferred_backend = (
+                self.application_config.general.preferred_backend
+            )
+            self.config_repository.save(persisted_config)
+        except Exception as exc:
+            self.last_error = (
+                "Could not save engine preference "
+                f"({type(exc).__name__})"
+            )
 
     def action_open_language(self) -> None:
         mode = self.state.engine_mode
@@ -862,7 +931,11 @@ class SubsApp(App):
         if self.state.active_view == "config":
             config = self.config_draft
             mode = config.general.preferred_backend
-        if self.merge_mode or mode in {EngineMode.AUTO, EngineMode.ASK}:
+        if mode in {
+            EngineMode.ALL_PROVIDERS,
+            EngineMode.AUTO,
+            EngineMode.ASK,
+        }:
             provider_scope = set(self.adapters) or set(Provider)
         else:
             provider_scope = {mode.provider} if mode.provider else set(Provider)
@@ -964,9 +1037,7 @@ class SubsApp(App):
         self.start_search()
 
     def _set_engine_action(self, mode: EngineMode) -> None:
-        self.state.choose_engine(mode)
-        self.application_config.general.preferred_backend = mode
-        self.start_search()
+        self._engine_chosen(mode)
 
     def action_download_cursor(self) -> None:
         candidate = self.current_candidate()
@@ -1221,7 +1292,7 @@ class SubsApp(App):
     def action_help(self) -> None:
         self.notify(
             "F1–F4 views · e engine · l language · / query · "
-            "j/k move · Enter download · m merge · q quit",
+            "j/k move · Enter download · m All providers · q quit",
             title="Command deck shortcuts",
             timeout=8,
         )
@@ -1375,10 +1446,9 @@ class SubsApp(App):
             self._refresh_status()
             return
         preferred = draft.general.preferred_backend
-        merge_changed = draft.general.merge_results != self.merge_mode
         engine_changed = (
             preferred is not EngineMode.ASK and preferred is not self.state.engine_mode
-        ) or merge_changed
+        )
         language_changed = bool(language and language != self.state.language)
         if not self.config_path:
             self.notice = "Session updated; no config path was supplied"
@@ -1398,9 +1468,15 @@ class SubsApp(App):
             )
         self.application_config = copy.deepcopy(draft)
         self.config_draft = copy.deepcopy(draft)
-        self.merge_mode = draft.general.merge_results
         if preferred is not EngineMode.ASK:
+            if (
+                preferred is EngineMode.ALL_PROVIDERS
+                and self.state.engine_mode
+                not in {EngineMode.ASK, EngineMode.ALL_PROVIDERS}
+            ):
+                self._engine_before_all = self.state.engine_mode
             self.state.choose_engine(preferred)
+        self.all_providers_mode = self.state.engine_mode is EngineMode.ALL_PROVIDERS
         if language:
             self.state.set_language(language)
         restart_search = False
@@ -1461,7 +1537,7 @@ class SubsApp(App):
     def watch_notice(self, _value) -> None:
         self._refresh_status()
 
-    def watch_merge_mode(self, _value) -> None:
+    def watch_all_providers_mode(self, _value) -> None:
         self._refresh_status()
 
     def _refresh_all(self) -> None:
@@ -1515,10 +1591,25 @@ def run_tui(
     media_paths: list[str],
     overrides: dict[str, Any],
     config_path: str,
+    recursive_search: bool = False,
+    output_directory: str | Path | None = None,
+    language_resolution: tuple[str, str] = ("", "missing"),
 ) -> None:
-    SubsApp(
-        config=config,
-        media_paths=media_paths,
-        overrides=overrides,
-        config_path=config_path,
-    ).run()
+    try:
+        app = SubsApp(
+            config=config,
+            media_paths=media_paths,
+            overrides=overrides,
+            config_path=config_path,
+            recursive_search=recursive_search,
+            output_directory=output_directory,
+            language_resolution=language_resolution,
+        )
+    except ValueError as exc:
+        if str(exc) != (
+            "No language selected. Use --lang or set general.default_language."
+        ):
+            raise
+        print(f"Error: {exc}", file=sys.stderr)
+        raise SystemExit(1) from None
+    app.run()

@@ -123,16 +123,26 @@ class SubSource:
         sync_audio_to_subs=False,
         hearing_impaired=False,
         auto_select=True,
+        output_directory=None,
     ):
         self.api_key = api_key
         self.sync_audio_to_subs = sync_audio_to_subs
         self.hearing_impaired = hearing_impaired
         self.auto_select = auto_select
+        self.output_directory = (
+            Path(output_directory) if output_directory is not None else None
+        )
         self.api_base_url = "https://api.subsource.net/api/v1"
         self.console = Console()
         self.subtitle_utils = SubtitleUtils()
         self.standardize_subtitle_objects = None
         self._last_request_error = None
+
+    def _output_path(self, media_path, filename):
+        directory = self.output_directory or Path(media_path).parent
+        if self.output_directory is not None:
+            directory.mkdir(parents=True, exist_ok=True)
+        return directory / filename
 
     # ------------------------------------------------------------------ #
     # HTTP / parsing helpers
@@ -495,7 +505,10 @@ class SubSource:
         abs_url = self._download_url_for(subtitle_id)
         response = self._get_raw(abs_url)
 
-        archive_path = video_input_path.with_suffix(".download")
+        archive_path = self._output_path(
+            video_input_path,
+            f"{video_input_path.stem}.download",
+        )
         archive = None
         try:
             with open(archive_path, "wb") as f:
@@ -557,8 +570,9 @@ class SubSource:
                         target_filename = (
                             subtitle_filename if ext == ".ass" else fallback_filename
                         )
-                        selected_subtitle_path = (
-                            video_input_path.parent / target_filename
+                        selected_subtitle_path = self._output_path(
+                            video_input_path,
+                            target_filename,
                         )
                     else:
                         original_name = Path(sf).stem
@@ -569,7 +583,17 @@ class SubSource:
                             else f"{original_name}{extension}"
                         )
 
-                    target_path = video_input_path.parent / target_filename
+                    target_path = self._output_path(
+                        video_input_path,
+                        target_filename,
+                    )
+                    if self.output_directory is not None and target_path.exists():
+                        if target_path == selected_subtitle_path:
+                            selected_subtitle_path = None
+                        self.console.print(
+                            f"[bold red]Subtitle already exists: {target_path}[/]"
+                        )
+                        continue
                     with open(target_path, "w", encoding="utf-8") as target:
                         target.write(decoded_content)
                     self.console.print(

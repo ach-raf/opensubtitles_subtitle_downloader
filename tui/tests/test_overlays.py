@@ -70,7 +70,7 @@ def test_language_popover_enter_confirms_all_remaining_files():
 
 def test_engine_switcher_reopens_on_current_all_providers_choice():
     screen = EngineSwitcher(
-        current=EngineMode.OPENSUBTITLES,
+        current=EngineMode.ALL_PROVIDERS,
         health={
             Provider.OPENSUBTITLES: HealthResult(
                 provider=Provider.OPENSUBTITLES,
@@ -79,56 +79,49 @@ def test_engine_switcher_reopens_on_current_all_providers_choice():
                 latency_ms=41,
             )
         },
-        merge_mode=True,
     )
 
-    assert _drive_screen(screen, ["enter"]) == (
-        EngineMode.AUTO,
-        True,
-    )
+    assert _drive_screen(screen, ["enter"]) is EngineMode.ALL_PROVIDERS
 
 
 def test_engine_switcher_auto_is_selectable():
     screen = EngineSwitcher(
         current=EngineMode.OPENSUBTITLES,
         health={},
-        merge_mode=False,
     )
 
     assert _drive_screen(
         screen,
         ["down", "down", "down", "enter"],
-    ) == (EngineMode.AUTO, False)
+    ) is EngineMode.AUTO
 
 
 def test_engine_switcher_all_providers_is_a_first_class_choice():
     screen = EngineSwitcher(
         current=EngineMode.OPENSUBTITLES,
         health={},
-        merge_mode=False,
     )
 
     assert _drive_screen(
         screen,
         ["down", "down", "down", "down", "enter"],
-    ) == (EngineMode.AUTO, True)
+    ) is EngineMode.ALL_PROVIDERS
 
 
 def test_engine_switcher_explains_modes_without_repeating_itself():
     screen = EngineSwitcher(
         current=EngineMode.AUTO,
         health={},
-        merge_mode=False,
     )
 
     assert screen.HELP_TEXT == (
         "Choose a provider or search mode.\n"
         "Auto: first match wins  ·  All providers: combined results"
     )
-    assert screen._label(EngineMode.AUTO, False) == (
+    assert screen._label(EngineMode.AUTO) == (
         "Auto fallback  ·  SubSource → OpenSubtitles → SubDL"
     )
-    assert screen._label(EngineMode.AUTO, True) == (
+    assert screen._label(EngineMode.ALL_PROVIDERS) == (
         "All providers  ·  search every configured source"
     )
 
@@ -137,7 +130,6 @@ def test_engine_switcher_omits_repeated_unknown_health_status():
     screen = EngineSwitcher(
         current=EngineMode.OPENSUBTITLES,
         health={},
-        merge_mode=False,
     )
 
     assert screen._label(EngineMode.OPENSUBTITLES) == "OpenSubtitles"
@@ -159,7 +151,7 @@ def test_keymap_actions_are_callable_and_searchable():
         action.shortcut for action in actions if action.id.startswith("view.")
     ] == ["F1", "F2", "F3", "F4"]
     assert Keymap().by_id("engine.open").shortcut == "e"
-    assert Keymap().search("engine merge")[0].id == "engine.merge"
+    assert Keymap().search("engine all providers")[0].id == "engine.all-providers"
 
 
 def test_app_keymap_contains_configured_languages_and_all_engines():

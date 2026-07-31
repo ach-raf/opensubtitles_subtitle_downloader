@@ -1,4 +1,4 @@
-"""Compact engine picker with advisory health and merge control."""
+"""Compact engine picker with advisory provider health."""
 
 from textual import on
 from textual.app import ComposeResult
@@ -11,7 +11,7 @@ from textual.widgets.option_list import Option
 from tui.domain import EngineMode, HealthResult, Provider
 
 
-class EngineSwitcher(ModalScreen[tuple[EngineMode, bool] | None]):
+class EngineSwitcher(ModalScreen[EngineMode | None]):
     DEFAULT_CSS = """
     EngineSwitcher {
         align: center middle;
@@ -54,20 +54,18 @@ class EngineSwitcher(ModalScreen[tuple[EngineMode, bool] | None]):
         self,
         current: EngineMode,
         health: dict[Provider, HealthResult],
-        merge_mode: bool,
         configured: set[Provider] | None = None,
     ) -> None:
         super().__init__()
         self.current = current
         self.health = health
-        self.merge_mode = merge_mode
         self.configured = configured if configured is not None else set(Provider)
         self.choices = [
-            (EngineMode.OPENSUBTITLES, False),
-            (EngineMode.SUBDL, False),
-            (EngineMode.SUBSOURCE, False),
-            (EngineMode.AUTO, False),
-            (EngineMode.AUTO, True),
+            EngineMode.OPENSUBTITLES,
+            EngineMode.SUBDL,
+            EngineMode.SUBSOURCE,
+            EngineMode.AUTO,
+            EngineMode.ALL_PROVIDERS,
         ]
 
     def compose(self) -> ComposeResult:
@@ -80,29 +78,28 @@ class EngineSwitcher(ModalScreen[tuple[EngineMode, bool] | None]):
             yield OptionList(
                 *[
                     Option(
-                        self._label(mode, merge),
-                        id="all-providers" if merge else mode.value,
+                        self._label(mode),
+                        id=mode.value,
                         disabled=(
                             mode.provider is not None
                             and mode.provider not in self.configured
                         ),
                     )
-                    for mode, merge in self.choices
+                    for mode in self.choices
                 ],
                 id="engine-options",
             )
 
     def on_mount(self) -> None:
         options = self.query_one("#engine-options", OptionList)
-        target = (EngineMode.AUTO, True) if self.merge_mode else (self.current, False)
         try:
-            options.highlighted = self.choices.index(target)
+            options.highlighted = self.choices.index(self.current)
         except ValueError:
             options.highlighted = 0
         options.focus()
 
-    def _label(self, mode: EngineMode, merge: bool = False) -> str:
-        if merge:
+    def _label(self, mode: EngineMode) -> str:
+        if mode is EngineMode.ALL_PROVIDERS:
             return "All providers  ·  search every configured source"
         if mode is EngineMode.AUTO:
             return "Auto fallback  ·  SubSource → OpenSubtitles → SubDL"

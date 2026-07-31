@@ -255,6 +255,16 @@ def test_interactive_startup_requests_language_after_engine(tmp_path):
     assert state.needs_language_setup
 
 
+def test_all_providers_is_a_concrete_engine_choice():
+    item = _domain_item("movie.mkv")
+    state = SessionState(queue=[item])
+
+    state.choose_engine(EngineMode.ALL_PROVIDERS)
+
+    assert state.engine_mode is EngineMode.ALL_PROVIDERS
+    assert item.engine_mode is EngineMode.ALL_PROVIDERS
+
+
 def test_completed_item_advances_to_next_non_terminal_item():
     state = SessionState(queue=[_domain_item("a.mkv"), _domain_item("b.mkv")])
     first = state.active_item

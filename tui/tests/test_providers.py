@@ -1,6 +1,8 @@
 from pathlib import Path
 
 from library.OpenSubtitles import OpenSubtitles
+from library.SubDL import SubDL
+from library.SubSource import SubSource
 from tui.domain import Provider, SearchRequest
 from tui.providers.opensubtitles import OpenSubtitlesAdapter
 from tui.providers.subdl import SubDLAdapter
@@ -46,6 +48,11 @@ class FailingClient:
 class SecretFailingClient:
     def search_candidates(self, path, language, query):
         raise OSError("GET https://example.test/search?api_key=do-not-leak&lang=en")
+
+
+class QuietConsole:
+    def print(self, *_args, **_kwargs):
+        return None
 
 
 def test_subdl_adapter_keeps_authenticated_url_private():
@@ -145,3 +152,224 @@ def test_opensubtitles_candidates_add_hash_and_filename_results(tmp_path):
     assert len(results) == 6
     shared = next(row for row in results if row["id"] == "shared")
     assert shared["attributes"]["moviehash_match"] is True
+
+
+def test_opensubtitles_legacy_download_uses_external_output_directory(tmp_path):
+    output_directory = tmp_path / "subtitles"
+    media = tmp_path / "library" / "Movie.mkv"
+    saved_paths = []
+    client = object.__new__(OpenSubtitles)
+    client.output_directory = output_directory
+    client.auto_select = True
+    client.sync_audio_to_subs = False
+    client.console = QuietConsole()
+    client._gather_candidates = lambda *_args: ([{"id": "1"}], False)
+    client.get_download_link = lambda _selected: "https://example.test/subtitle"
+    client.print_subtitle_info = lambda _selected: None
+
+    def save_subtitle(_url, path):
+        saved_paths.append(path)
+        return True
+
+    client.save_subtitle = save_subtitle
+    client.subtitle_utils = type(
+        "Utils",
+        (),
+        {
+            "sort_list_of_dicts_by_key": staticmethod(lambda rows, _key: rows),
+            "auto_select_subtitle": staticmethod(lambda _name, rows: rows[0]),
+            "clean_subtitles": staticmethod(lambda _path: None),
+        },
+    )()
+
+    assert client.process_media_file(media, "en") is True
+    assert saved_paths == [output_directory / "Movie.en.srt"]
+
+
+def test_subdl_legacy_single_file_uses_external_output_directory(
+    tmp_path,
+    monkeypatch,
+):
+    output_directory = tmp_path / "subtitles"
+    media = tmp_path / "library" / "Movie.mkv"
+    client = object.__new__(SubDL)
+    client.output_directory = output_directory
+    client.download_base_url = "https://example.test"
+    client.console = QuietConsole()
+    response = type(
+        "Response",
+        (),
+        {
+            "content": b"subtitle",
+            "raise_for_status": staticmethod(lambda: None),
+        },
+    )()
+    monkeypatch.setattr(
+        "library.SubDL.requests.get",
+        lambda *_args, **_kwargs: response,
+    )
+
+    result = client._download_single_file("/movie.srt", "srt", media, "en")
+
+    assert result == output_directory / "Movie.en.srt"
+    assert result.read_text(encoding="utf-8") == "subtitle"
+
+
+def test_subsource_legacy_archive_uses_external_output_directory(tmp_path):
+    output_directory = tmp_path / "subtitles"
+    media = tmp_path / "library" / "Movie.mkv"
+    archive_paths = []
+    client = object.__new__(SubSource)
+    client.output_directory = output_directory
+    client.console = QuietConsole()
+    client._download_url_for = lambda _subtitle_id: "https://example.test/archive"
+    client._get_raw = lambda _url: type(
+        "Response",
+        (),
+        {"iter_content": staticmethod(lambda chunk_size: [b"archive"])},
+    )()
+
+    class FakeArchive:
+        def names(self):
+            return ["release.srt"]
+
+        def read(self, _name):
+            return b"subtitle"
+
+        def close(self):
+            return None
+
+    def open_archive(path):
+        archive_paths.append(path)
+        return FakeArchive()
+
+    client._open_archive = open_archive
+
+    result = client._download_archive(
+        {"id": "88"},
+        media,
+        "en",
+        None,
+        None,
+        True,
+    )
+
+    assert archive_paths == [output_directory / "Movie.download"]
+    assert result == output_directory / "Movie.en.srt"
+    assert result.read_text(encoding="utf-8") == "subtitle"
+
+
+def test_subdl_legacy_external_output_does_not_overwrite_existing_file(
+    tmp_path,
+    monkeypatch,
+):
+    output_directory = tmp_path / "subtitles"
+    output_directory.mkdir()
+    existing = output_directory / "Movie.en.srt"
+    existing.write_text("old", encoding="utf-8")
+    client = object.__new__(SubDL)
+    client.output_directory = output_directory
+    client.download_base_url = "https://example.test"
+    client.console = QuietConsole()
+    response = type(
+        "Response",
+        (),
+        {
+            "content": b"new",
+            "raise_for_status": staticmethod(lambda: None),
+        },
+    )()
+    monkeypatch.setattr(
+        "library.SubDL.requests.get",
+        lambda *_args, **_kwargs: response,
+    )
+
+    result = client._download_single_file(
+        "/movie.srt",
+        "srt",
+        tmp_path / "library" / "Movie.mkv",
+        "en",
+    )
+
+    assert result is None
+    assert existing.read_text(encoding="utf-8") == "old"
+
+
+def test_opensubtitles_legacy_external_output_does_not_overwrite_existing_file(
+    tmp_path,
+):
+    output_directory = tmp_path / "subtitles"
+    output_directory.mkdir()
+    existing = output_directory / "Movie.en.srt"
+    existing.write_text("old", encoding="utf-8")
+    client = object.__new__(OpenSubtitles)
+    client.output_directory = output_directory
+    client.auto_select = True
+    client.sync_audio_to_subs = False
+    client.console = QuietConsole()
+    client._gather_candidates = lambda *_args: ([{"id": "1"}], False)
+    client.get_download_link = lambda _selected: "https://example.test/subtitle"
+    client.print_subtitle_info = lambda _selected: None
+    client.save_subtitle = lambda _url, path: path.write_text(
+        "new",
+        encoding="utf-8",
+    )
+    client.subtitle_utils = type(
+        "Utils",
+        (),
+        {
+            "sort_list_of_dicts_by_key": staticmethod(lambda rows, _key: rows),
+            "auto_select_subtitle": staticmethod(lambda _name, rows: rows[0]),
+            "clean_subtitles": staticmethod(lambda _path: None),
+        },
+    )()
+
+    result = client.process_media_file(
+        tmp_path / "library" / "Movie.mkv",
+        "en",
+    )
+
+    assert result is False
+    assert existing.read_text(encoding="utf-8") == "old"
+
+
+def test_subsource_legacy_external_output_does_not_overwrite_existing_file(
+    tmp_path,
+):
+    output_directory = tmp_path / "subtitles"
+    output_directory.mkdir()
+    existing = output_directory / "Movie.en.srt"
+    existing.write_text("old", encoding="utf-8")
+    client = object.__new__(SubSource)
+    client.output_directory = output_directory
+    client.console = QuietConsole()
+    client._download_url_for = lambda _subtitle_id: "https://example.test/archive"
+    client._get_raw = lambda _url: type(
+        "Response",
+        (),
+        {"iter_content": staticmethod(lambda chunk_size: [b"archive"])},
+    )()
+
+    class FakeArchive:
+        def names(self):
+            return ["release.srt"]
+
+        def read(self, _name):
+            return b"new"
+
+        def close(self):
+            return None
+
+    client._open_archive = lambda _path: FakeArchive()
+
+    result = client._download_archive(
+        {"id": "88"},
+        tmp_path / "library" / "Movie.mkv",
+        "en",
+        None,
+        None,
+        True,
+    )
+
+    assert result is None
+    assert existing.read_text(encoding="utf-8") == "old"

@@ -15,7 +15,7 @@ from textual.widgets import (
     Switch,
 )
 
-from tui.domain import Provider
+from tui.domain import EngineMode, Provider
 from tui.widgets.detail_pane import DetailPane
 from tui.widgets.query_bar import QueryBar
 from tui.widgets.results_table import ResultsTable
@@ -241,7 +241,7 @@ class ConfigView(Container):
         config = app.config_draft
         self.query_one("#config-engine", Button).label = (
             "All providers"
-            if config.general.merge_results
+            if config.general.preferred_backend is EngineMode.ALL_PROVIDERS
             else config.general.preferred_backend.label
         )
         self.query_one("#config-language", Button).label = (

@@ -239,7 +239,7 @@ class AppState:
 
     backend: Backend = Backend.OPENSUBTITLES
     language: str = "en"
-    merge_mode: bool = False
+    all_providers_mode: bool = False
     run_policy: RunPolicy = field(default_factory=RunPolicy)
 
     query: str = ""

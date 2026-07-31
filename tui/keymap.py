@@ -50,11 +50,11 @@ def default_actions() -> list[Action]:
             lambda app: app.action_open_engine(),
         ),
         Action(
-            "engine.merge",
-            "Toggle engine merge across providers",
-            "search",
+            "engine.all-providers",
+            "Toggle All providers mode",
+            "engine",
             "m",
-            lambda app: app.action_toggle_merge(),
+            lambda app: app.action_toggle_all_providers(),
         ),
         Action(
             "engine.reprobe",

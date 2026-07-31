@@ -21,6 +21,7 @@ class OpenSubtitles:
         sync_audio_to_subs=False,
         hearing_impaired=False,
         auto_select=True,
+        output_directory=None,
     ):
         self.username = username
         self.password = password
@@ -29,9 +30,18 @@ class OpenSubtitles:
         self.sync_audio_to_subs = sync_audio_to_subs
         self.hearing_impaired = hearing_impaired
         self.auto_select = auto_select
+        self.output_directory = (
+            Path(output_directory) if output_directory is not None else None
+        )
         self.console = Console()
         self.subtitle_utils = SubtitleUtils()
         self.token = self.login()
+
+    def _output_path(self, media_path, filename):
+        directory = self.output_directory or Path(media_path).parent
+        if self.output_directory is not None:
+            directory.mkdir(parents=True, exist_ok=True)
+        return directory / filename
 
     def login(self):
         token = self.subtitle_utils.read_token()
@@ -232,7 +242,15 @@ class OpenSubtitles:
                 "[cyan]Searching for subtitles for[/cyan] "
                 f"[yellow]{media_name}[/yellow]"
             )
-            subtitle_path = Path(path.parent, f"{path.stem}.{language_choice}.srt")
+            subtitle_path = self._output_path(
+                path,
+                f"{path.stem}.{language_choice}.srt",
+            )
+            if self.output_directory is not None and subtitle_path.exists():
+                self.console.print(
+                    f"[bold red]Subtitle already exists: {subtitle_path}[/]"
+                )
+                return False
             results, _request_failed = self._gather_candidates(
                 path,
                 language_choice,

@@ -3,6 +3,12 @@ from pathlib import Path
 from tui.domain import Candidate, EngineMode, Provider, SearchRequest
 
 
+def test_all_providers_is_a_backend_mode():
+    assert EngineMode("all-providers") is EngineMode.ALL_PROVIDERS
+    assert EngineMode.ALL_PROVIDERS.provider is None
+    assert EngineMode.ALL_PROVIDERS.label == "All providers"
+
+
 def test_candidate_key_is_provider_scoped():
     left = Candidate(
         provider=Provider.OPENSUBTITLES,

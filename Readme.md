@@ -11,7 +11,7 @@ subtitles.
 
 ## What it does
 
-- Searches one provider or merges results from all available providers.
+- Searches one provider or every available provider through All providers mode.
 - Combines OpenSubtitles hash and filename matches.
 - Filters by language, hearing-impaired status, and AI translation status.
 - Handles individual videos, multiple paths, and folders.
@@ -20,8 +20,8 @@ subtitles.
 - Removes known advertising lines from supported subtitle formats.
 - Synchronizes subtitles to the video's audio with
   [ffsubsync](https://github.com/smacke/ffsubsync).
-- Includes a full-screen Textual interface and the original numbered-prompt
-  command-line interface.
+- Includes a full-screen Textual interface and a noninteractive/headless CLI
+  for batch and compatibility workflows.
 
 ## Requirements
 
@@ -108,13 +108,14 @@ and add it to the `subsource` section.
 
 ## Configuration
 
-`config.yaml.sample` is the best starting point. A shortened example, including
-the TUI's saved merge setting:
+`config.yaml.sample` is the best starting point. A shortened example:
 
 ```yaml
 general:
   preferred_backend: ask
-  merge_results: false
+  default_language: ""
+  recursive_search: false
+  subtitle_output_directory: ""
   skip_interactive_menu: false
   sync_audio_to_subs: ask
   auto_selection: false
@@ -155,17 +156,23 @@ Important settings:
 
 | Setting | Values | Meaning |
 |---|---|---|
-| `preferred_backend` | `opensubtitles`, `subdl`, `subsource`, `auto`, `ask` | Selects the initial provider behavior. |
-| `merge_results` | `true`, `false` | Searches all configured providers and merges duplicate results. |
+| `preferred_backend` | `opensubtitles`, `subdl`, `subsource`, `auto`, `all-providers`, `ask` | Selects the provider behavior. |
+| `default_language` | ISO language code or empty string | Sets the run's language; empty uses the selected provider's first configured language. |
+| `recursive_search` | `true`, `false` | Recursively discovers videos below folder inputs. |
+| `subtitle_output_directory` | path or empty string | Saves subtitles in one writable directory; empty saves beside each video. |
+| `skip_interactive_menu` | `true`, `false` | Confirms configured startup choices without opening the TUI's initial selection menus. |
 | `sync_audio_to_subs` | `true`, `false`, `ask` | Always, never, or interactively synchronize after downloading. |
 | `auto_selection` | `true`, `false` | Automatically chooses a result instead of waiting for a selection. |
 | `opt_force_utf8` | `true`, `false` | Normalizes downloaded subtitle text to UTF-8. |
-| `no_tui` | `true`, `false` | Uses the legacy numbered CLI by default when set to `true`. |
+| `no_tui` | `true`, `false` | Uses the noninteractive/headless CLI by default when set to `true`. |
 | `hearing_impaired` | `include`, `exclude`, `only` | Controls hearing-impaired subtitle results. |
 | `show_ai_translated` | `true`, `false` | Includes or hides subtitles marked as AI translated. |
 
 Each provider has its own `languages` mapping. The display name is shown in the
 interface; the value is the provider's language code.
+
+`auto` stops after the first configured provider with candidates.
+`all-providers` searches every configured provider and uses one shared ranking.
 
 To remove additional advertising lines, point
 `cleaning_subtitles.ads.file_path` to a text file containing entries separated
@@ -186,19 +193,106 @@ Pass several files or folders:
 python download_subs.py "path/to/movie.mkv" "path/to/show/season 01"
 ```
 
+Recursively scan a movie archive:
+
+```bash
+python download_subs.py --recursive "path/to/movies"
+```
+
+Save subtitles outside a read-only media library:
+
+```bash
+python download_subs.py --output-dir "path/to/subtitles" "path/to/movies"
+```
+
+The command line overrides `config.yaml` for one run. Use `--no-recursive` to
+disable configured recursion, or `--output-next-to-media` to ignore a configured
+subtitle output directory. Relative paths in `config.yaml` resolve from the
+configuration file's directory; relative `--output-dir` paths resolve from the
+current working directory.
+
+Custom output uses a flat directory. Existing subtitle files are not silently
+overwritten, and the headless CLI rejects a recursive batch when multiple
+videos would produce the same output filename.
+
 Start the TUI with a language and provider selected:
 
 ```bash
 python download_subs.py --lang en --backend subdl "path/to/movie.mkv"
 ```
 
-`--lang` and `--backend` seed the TUI. They do not override choices in the
-legacy numbered CLI.
+Search all configured providers in the TUI:
 
-Use the legacy interface for a single run:
+```bash
+python download_subs.py --backend all-providers "movie.mkv"
+```
+
+Explicit `--lang` and `--backend` options override `config.yaml` for one run. If
+neither `--lang` nor `general.default_language` is set, the first language under
+the selected provider is used. Batch and no-TUI runs apply the resolved language
+automatically without a language prompt.
+
+Use the noninteractive/headless CLI for a single run:
 
 ```bash
 python download_subs.py --no-tui "path/to/movie.mkv"
+```
+
+Apply a language automatically in a no-TUI batch:
+
+```bash
+python download_subs.py --no-tui --lang ar "path/to/season"
+```
+
+Search every configured provider in a no-TUI batch:
+
+```bash
+python download_subs.py --no-tui --backend all-providers "season"
+```
+
+In the TUI, `auto_selection` controls whether the highest-ranked shared result
+is downloaded automatically or shown for selection. No-TUI always downloads
+the highest-ranked all-provider candidate regardless of `auto_selection`. Provider or
+file failures are reported without stopping later files in the batch.
+
+### Unattended batch automation
+
+For repeatable runs with no startup, language, result-selection, or sync
+questions, configure concrete defaults:
+
+```yaml
+general:
+  preferred_backend: subdl
+  default_language: ar
+  recursive_search: true
+  skip_interactive_menu: true
+  sync_audio_to_subs: false
+  auto_selection: true
+  no_tui: true
+```
+
+`preferred_backend: auto` is suitable when an unattended run should stop at the
+first configured provider with candidates. Use `preferred_backend:
+all-providers` to query every configured provider and choose from their shared
+ranking. Avoid `preferred_backend: ask` for automation because it requires a
+provider choice. If `default_language` is empty, YAML order matters: the first
+entry under the selected provider's `languages` mapping is used.
+
+Command-line options have priority over these settings for the current run:
+
+```bash
+python download_subs.py \
+  --no-tui \
+  --backend subdl \
+  --lang ar \
+  --recursive \
+  "path/to/library"
+```
+
+On Windows PowerShell, use the same command on one line:
+
+```powershell
+python download_subs.py --no-tui --backend subdl --lang ar --recursive "D:\Shows"
 ```
 
 Force the TUI when `general.no_tui` is enabled:
@@ -224,7 +318,7 @@ The interface opens on the Search view. The most useful keys are:
 | `/` | Focus the query field |
 | `L` | Select a language |
 | `B` | Select a provider, automatic fallback, or all-provider search |
-| `m` | Toggle merged provider results |
+| `m` | Toggle All providers mode |
 | `r` | Check provider availability and latency again |
 | `p` | Preview the selected subtitle |
 | `y` | Copy the selected result URL |
@@ -253,7 +347,48 @@ To add it to the Windows Send To menu:
 3. Put a shortcut to the edited batch file in that folder.
 
 You can then right-click a video or folder and send it to the downloader. Set
-`general.no_tui: true` if you prefer the numbered interface for this workflow.
+`general.no_tui: true` if you prefer the noninteractive/headless CLI for this
+workflow.
+
+## Linux and macOS (run from anywhere)
+
+Create a wrapper script so `download_subs` works from any directory.
+
+1. Make sure `$HOME/bin` is on your `PATH`. Add this to `~/.bashrc` or
+   `~/.bash_profile`:
+
+   ```bash
+   export PATH="$PATH:$HOME/bin"
+   ```
+
+2. Create `$HOME/bin/download_subs.sh` pointing at this repository:
+
+   ```bash
+   #!/bin/bash
+
+   # Activate the project's virtualenv, run the script, then deactivate.
+   source /path/to/new_opensubtitles/.venv/bin/activate \
+     && python /path/to/new_opensubtitles/download_subs.py "$@" \
+     && deactivate
+   ```
+
+   Replace `/path/to/new_opensubtitles` with the real path to this repository.
+
+3. Make it executable:
+
+   ```bash
+   chmod +x "$HOME/bin/download_subs.sh"
+   ```
+
+After setup, call it from anywhere:
+
+```bash
+download_subs.sh "path/to/movie.mkv"
+download_subs.sh "path/to/season 01"
+```
+
+Set `general.no_tui: true` if you prefer the noninteractive/headless CLI for this
+workflow.
 
 ## Troubleshooting
 
@@ -261,7 +396,7 @@ You can then right-click a video or folder and send it to the downloader. Set
 
 Check that its API key and language mapping are present in `config.yaml`. In
 the TUI, press `r` to check provider availability, then try a different
-provider or merged search.
+provider or All providers mode.
 
 ### Synchronization fails
 

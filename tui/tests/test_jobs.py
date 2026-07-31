@@ -15,9 +15,11 @@ class RecordingAdapter:
     def __init__(self, provider):
         self.provider = provider
         self.downloads = []
+        self.media_paths = []
 
     def download(self, candidate, media_path):
         self.downloads.append(candidate.key)
+        self.media_paths.append(media_path)
         target = media_path.with_name(f"{media_path.stem}.en.srt")
         target.write_text("new", encoding="utf-8")
         return DownloadResult(
@@ -94,6 +96,39 @@ def test_explicit_replace_is_atomic_from_staging(tmp_path):
 
     assert result.succeeded
     assert target.read_text(encoding="utf-8") == "new"
+
+
+def test_download_stages_and_saves_in_external_output_directory(tmp_path):
+    adapter = RecordingAdapter(Provider.SUBDL)
+    output_directory = tmp_path / "writable-subs"
+    media = tmp_path / "read-only-library" / "Movie.mkv"
+
+    result = JobCoordinator(
+        {Provider.SUBDL: adapter},
+        output_directory=output_directory,
+    ).download(candidate_for(Provider.SUBDL), media)
+
+    assert result.succeeded
+    assert result.media_path == media
+    assert result.subtitle_path == output_directory / "Movie.en.srt"
+    assert adapter.media_paths[0].parent.parent == output_directory
+
+
+def test_download_reports_unwritable_output_directory(tmp_path, monkeypatch):
+    def deny_staging(*_args, **_kwargs):
+        raise PermissionError("access denied")
+
+    monkeypatch.setattr("tui.jobs.TemporaryDirectory", deny_staging)
+    result = JobCoordinator(
+        {Provider.SUBDL: RecordingAdapter(Provider.SUBDL)},
+        output_directory=tmp_path / "subtitles",
+    ).download(
+        candidate_for(Provider.SUBDL),
+        tmp_path / "library" / "Movie.mkv",
+    )
+
+    assert result.succeeded is False
+    assert "access denied" in result.error
 
 
 def test_clean_failure_is_not_recorded_as_success(tmp_path):
