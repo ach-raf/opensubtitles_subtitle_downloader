@@ -351,7 +351,29 @@ git add tui/media.py tui/config.py tui/app.py download_subs.py config.yaml.sampl
 git commit -m "Centralize configurable media discovery"
 ```
 
-### Task 5: Final integration verification
+### Task 5: Unify noninteractive provider modes
+
+**Files:**
+- Modify: `tui/headless.py`
+- Modify: `download_subs.py`
+- Test: `tui/tests/test_headless.py`
+- Test: `tui/tests/test_startup.py`
+
+**Interfaces:**
+- Consumes: `ApplicationConfig.general.preferred_backend` as `EngineMode`.
+- Produces: headless dispatch through `SearchCoordinator.concrete`, `.auto`, or
+  `.all_providers`, followed by the existing shared download/post-process path.
+
+- [ ] Add failing tests for concrete and automatic coordinator dispatch.
+- [ ] Make the headless runner select its coordinator method from the configured
+  engine mode, treating `ASK` as the existing all-provider-compatible default.
+- [ ] Make `run_legacy(..., typed_headless=True)` build the typed runner for all
+  non-`ASK` backends and pass the CLI-resolved backend into its config.
+- [ ] Keep explicit legacy-orchestration tests isolated with
+  `typed_headless=False`; normal CLI calls retain the safe typed default.
+- [ ] Run `python -m pytest tui/tests/test_headless.py tui/tests/test_startup.py -q`.
+
+### Task 6: Final integration verification
 
 **Files:**
 - Verify only; no planned production modifications.

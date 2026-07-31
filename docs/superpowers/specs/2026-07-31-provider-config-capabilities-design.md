@@ -37,6 +37,12 @@ by their current clients. Their normalized `hi`/`hearingImpaired` metadata will
 drive the same coordinator filter. Provider-side filtering will not replace the
 coordinator filter because provider behavior and metadata availability differ.
 
+Noninteractive concrete-provider, automatic, and all-provider runs will use the
+same typed `SearchCoordinator` and `JobCoordinator` pipeline as the TUI. The old
+provider-owned download orchestration is retained only as an explicit legacy
+fallback. This ensures all three configuration policies are applied in normal
+`--no-tui` operation regardless of provider mode.
+
 ### AI-translated visibility
 
 `show_ai_translated` remains a local visibility filter. OpenSubtitles exposes
@@ -87,6 +93,8 @@ Tests will prove that:
 - the default media set accepts representative containers and raw AV1 input;
 - configured extensions can be added and excluded with exclusion precedence;
 - TUI and headless discovery receive the same resolved media extension set;
+- concrete, automatic, and all-provider headless modes share search filtering
+  and post-processing policy;
 - existing search, provider, post-processing, headless, and configuration tests
   continue to pass.
 
