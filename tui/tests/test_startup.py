@@ -215,6 +215,7 @@ def test_legacy_expands_recursively_before_provider_dispatch(
         [str(tmp_path / "library")],
         recursive=True,
         output_directory=output_directory,
+        typed_headless=False,
     )
 
     assert calls["constructor"] == ("config.yaml", output_directory)
@@ -252,7 +253,11 @@ def test_legacy_uses_configured_media_extension_overrides(tmp_path, monkeypatch)
         lambda *_args, **_kwargs: FakeDownloader(),
     )
 
-    download_subs.run_legacy("config.yaml", [str(tmp_path)])
+    download_subs.run_legacy(
+        "config.yaml",
+        [str(tmp_path)],
+        typed_headless=False,
+    )
 
     assert calls["download"][0] == [str(included.resolve())]
 
@@ -290,6 +295,7 @@ def test_legacy_uses_resolved_language_without_opening_language_menu(
         "config.yaml",
         [str(media)],
         resolved_language=("ar", "cli"),
+        typed_headless=False,
     )
 
     assert calls["dispatch"][1:] == (
@@ -329,6 +335,7 @@ def test_legacy_explicit_backend_controls_dispatch_and_provider_fallback(
         "config.yaml",
         [str(media)],
         backend=download_subs.SubtitleBackend.SUBDL,
+        typed_headless=False,
     )
 
     assert calls["dispatch"][1:] == (
@@ -370,7 +377,11 @@ def test_legacy_resolves_config_language_without_opening_language_menu(
         lambda *_args, **_kwargs: FakeDownloader(),
     )
 
-    download_subs.run_legacy("config.yaml", [str(media)])
+    download_subs.run_legacy(
+        "config.yaml",
+        [str(media)],
+        typed_headless=False,
+    )
 
     assert calls["dispatch"][1:] == (
         "fr",
@@ -625,6 +636,48 @@ def test_no_tui_all_providers_uses_headless_runner(tmp_path, monkeypatch):
 
     assert calls["run"] == ([media.resolve()], "ar")
     assert calls["legacy_downloads"] == []
+
+
+def test_no_tui_concrete_provider_uses_typed_headless_runner(tmp_path, monkeypatch):
+    media = tmp_path / "movie.mkv"
+    media.touch()
+    calls = {}
+
+    class FakeDownloader:
+        config = {
+            "general": {"preferred_backend": "subdl"},
+            "subdl": {"languages": {"Arabic": "ar"}},
+        }
+
+        def download_subtitles(self, *args):
+            calls["legacy"] = args
+
+    class FakeRunner:
+        def run(self, media_paths, language):
+            calls["run"] = (media_paths, language)
+            return HeadlessBatchSummary(attempted=1, succeeded=1, failed=0)
+
+    monkeypatch.setattr(
+        download_subs,
+        "SubtitleDownloader",
+        lambda *_args, **_kwargs: FakeDownloader(),
+    )
+    monkeypatch.setattr(
+        download_subs,
+        "_build_headless_all_providers_runner",
+        lambda *_args, **kwargs: calls.update(builder=kwargs) or FakeRunner(),
+    )
+
+    download_subs.run_legacy(
+        "config.yaml",
+        [str(media)],
+        backend=SubtitleBackend.SUBDL,
+        resolved_language=("ar", "cli"),
+    )
+
+    assert calls["run"] == ([media.resolve()], "ar")
+    assert calls["builder"]["backend"] is SubtitleBackend.SUBDL
+    assert "legacy" not in calls
 
 
 def test_no_tui_all_providers_exits_when_every_file_fails(

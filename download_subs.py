@@ -374,15 +374,18 @@ class SubtitleDownloader:
 def _build_headless_all_providers_runner(
     config_path: str,
     *,
+    backend: SubtitleBackend = SubtitleBackend.ALL_PROVIDERS,
     output_directory: str | Path | None = None,
     output_directory_overridden: bool = False,
 ):
     """Build the typed all-provider runner without loading it on TUI startup."""
     from tui.config import ConfigRepository
+    from tui.domain import EngineMode
     from tui.headless import HeadlessAllProvidersRunner
     from tui.providers.factory import create_adapters
 
     config = ConfigRepository(config_path).load()
+    config.general.preferred_backend = EngineMode(backend.value)
     if output_directory_overridden or output_directory is not None:
         config.general.subtitle_output_directory = (
             str(output_directory) if output_directory is not None else ""
@@ -404,6 +407,7 @@ def run_legacy(
     output_directory: str | Path | None = None,
     output_directory_overridden: bool = False,
     resolved_language: tuple[str, str] | None = None,
+    typed_headless: bool = True,
 ) -> None:
     """Run the non-TUI subtitle download flow.
 
@@ -419,9 +423,10 @@ def run_legacy(
 
     backend = backend or downloader._get_backend_from_config()
     headless_runner = None
-    if backend is SubtitleBackend.ALL_PROVIDERS:
+    if typed_headless and backend is not SubtitleBackend.ASK:
         headless_runner = _build_headless_all_providers_runner(
             config_path,
+            backend=backend,
             output_directory=output_directory,
             output_directory_overridden=output_directory_overridden,
         )

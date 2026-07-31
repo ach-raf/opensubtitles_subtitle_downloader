@@ -11,6 +11,7 @@ from tui.config import (
 from tui.domain import (
     Candidate,
     DownloadResult,
+    EngineMode,
     PostProcessResult,
     Provider,
 )
@@ -26,6 +27,8 @@ class FakeAllProvidersCoordinator:
     def __init__(self, results):
         self.results = list(results)
         self.requests = []
+        self.concrete_requests = []
+        self.auto_requests = []
 
     def all_providers(self, request):
         self.requests.append(request)
@@ -33,6 +36,14 @@ class FakeAllProvidersCoordinator:
         if isinstance(result, Exception):
             raise result
         return result
+
+    def concrete(self, provider, request):
+        self.concrete_requests.append((provider, request))
+        return self.all_providers(request)
+
+    def auto(self, request):
+        self.auto_requests.append(request)
+        return self.all_providers(request)
 
 
 class FakeJobs:
@@ -133,6 +144,53 @@ def test_headless_all_providers_downloads_only_first_ranked_candidate(
     assert request.show_ai_translated is False
 
 
+def test_headless_concrete_mode_uses_same_configured_search_policy(
+    tmp_path,
+    application_config,
+):
+    media = tmp_path / "movie.mkv"
+    media.touch()
+    application_config.general.preferred_backend = EngineMode.OPENSUBTITLES
+    coordinator = FakeAllProvidersCoordinator([result(candidate())])
+    runner = HeadlessAllProvidersRunner(
+        application_config,
+        adapters={Provider.OPENSUBTITLES: FakeAdapter()},
+        coordinator=coordinator,
+        jobs=FakeJobs(),
+    )
+
+    summary = runner.run([media], "ar")
+
+    assert summary.succeeded == 1
+    assert len(coordinator.concrete_requests) == 1
+    provider, request = coordinator.concrete_requests[0]
+    assert provider is Provider.OPENSUBTITLES
+    assert request.hearing_impaired == "exclude"
+    assert request.show_ai_translated is False
+
+
+def test_headless_auto_mode_uses_same_configured_search_policy(
+    tmp_path,
+    application_config,
+):
+    media = tmp_path / "movie.mkv"
+    media.touch()
+    application_config.general.preferred_backend = EngineMode.AUTO
+    coordinator = FakeAllProvidersCoordinator([result(candidate())])
+    runner = HeadlessAllProvidersRunner(
+        application_config,
+        adapters={Provider.OPENSUBTITLES: FakeAdapter()},
+        coordinator=coordinator,
+        jobs=FakeJobs(),
+    )
+
+    summary = runner.run([media], "ar")
+
+    assert summary.succeeded == 1
+    assert len(coordinator.auto_requests) == 1
+    assert coordinator.auto_requests[0].show_ai_translated is False
+
+
 def test_partial_provider_errors_are_emitted_and_best_candidate_downloads(
     tmp_path,
     application_config,
@@ -156,7 +214,10 @@ def test_partial_provider_errors_are_emitted_and_best_candidate_downloads(
 
     assert summary.succeeded == 1
     assert jobs.downloaded == [(best, media)]
-    assert any("SubDL" in message and "service unavailable" in message for message in emitted)
+    assert any(
+        "SubDL" in message and "service unavailable" in message
+        for message in emitted
+    )
 
 
 def test_no_candidates_fails_one_file_and_continues(

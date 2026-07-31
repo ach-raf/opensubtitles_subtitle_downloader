@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tui.config import ApplicationConfig
-from tui.domain import Provider, SearchRequest
+from tui.domain import EngineMode, Provider, SearchRequest
 from tui.jobs import JobCoordinator
 from tui.providers.base import ProviderAdapter
 from tui.search import SearchCoordinator
@@ -57,6 +57,7 @@ class HeadlessAllProvidersRunner:
 
         attempted = 0
         succeeded = 0
+        engine_mode = self.config.general.preferred_backend
         sync_policy = self.config.general.sync_audio_to_subs
         if sync_policy == "ask":
             self.emit(
@@ -75,7 +76,15 @@ class HeadlessAllProvidersRunner:
                     hearing_impaired=self.config.general.hearing_impaired,
                     show_ai_translated=self.config.general.show_ai_translated,
                 )
-                result = self.coordinator.all_providers(request)
+                if engine_mode is EngineMode.AUTO:
+                    result = self.coordinator.auto(request)
+                elif engine_mode.provider is not None:
+                    result = self.coordinator.concrete(
+                        engine_mode.provider,
+                        request,
+                    )
+                else:
+                    result = self.coordinator.all_providers(request)
                 for provider, error in result.errors.items():
                     self.emit(f"Warning: {provider.label}: {error}")
 
