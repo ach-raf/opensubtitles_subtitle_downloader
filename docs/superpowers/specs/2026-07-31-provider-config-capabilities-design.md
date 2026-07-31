@@ -16,8 +16,10 @@ interactive post-processing paths and the headless runner already pass the
 setting to `JobCoordinator`; that data flow will stay unchanged.
 
 The decoder will retain deterministic handling for UTF-8 (with or without a
-BOM) and UTF-16, then use the existing `chardet` dependency for legacy subtitle
-encodings before falling back to CP1252. The normalized file will continue to
+BOM) and UTF-16, then use `charset-normalizer` for legacy subtitle encodings
+before falling back to CP1252. BOM-less UTF-16/32 guesses are rejected because
+short single-byte text can otherwise be misclassified. The normalized file will
+continue to
 be written atomically with UTF-8 encoding and LF newlines. A failed conversion
 must be reported as `utf8_error` without preventing cleaning or synchronization.
 

@@ -4,7 +4,7 @@
 
 **Goal:** Make UTF-8 normalization robust, make provider metadata filtering truthful, and centralize configurable video-media discovery.
 
-**Architecture:** Keep search policy enforcement centralized in `SearchCoordinator`, while ensuring provider clients return the broadest result set needed for local filtering. Keep encoding conversion in `JobCoordinator` as a provider-independent post-download operation. Resolve one canonical media-extension set in `tui.media` and pass it to both TUI and headless path expansion.
+**Architecture:** Keep search policy enforcement centralized in `SearchCoordinator`, while ensuring provider clients return the broadest result set needed for local filtering. Keep encoding conversion in `JobCoordinator` as a provider-independent post-download operation, using `charset-normalizer` after deterministic Unicode decoding. Resolve one canonical media-extension set in `tui.media` and pass it to both TUI and headless path expansion.
 
 **Tech Stack:** Python 3.10+, pytest, requests, chardet, Textual TUI domain/provider layers.
 
@@ -160,13 +160,15 @@ Run: `python -m pytest tui/tests/test_jobs.py -k "force_utf8" -v`
 
 Expected: UTF-16 and disabled-conversion cases pass; Windows-1256 fails because the current CP1252 fallback produces different text.
 
-- [ ] **Step 3: Add chardet-backed legacy decoding**
+- [ ] **Step 3: Add charset-normalizer-backed legacy decoding**
 
-Import `chardet` and replace the unconditional CP1252 fallback with detected decoding, retaining CP1252 when detection supplies no usable encoding:
+Import `charset_normalizer.from_bytes` and replace the unconditional CP1252 fallback with detected decoding. Reject BOM-less UTF-16/32 guesses and retain CP1252 when detection supplies no usable single-byte encoding:
 
 ```python
-detected = chardet.detect(data)
-encoding = detected.get("encoding") or "cp1252"
+match = from_bytes(data).best()
+encoding = match.encoding if match is not None else "cp1252"
+if encoding.lower().replace("-", "_").startswith(("utf_16", "utf_32")):
+    encoding = "cp1252"
 try:
     text = data.decode(encoding)
 except (LookupError, UnicodeDecodeError):
