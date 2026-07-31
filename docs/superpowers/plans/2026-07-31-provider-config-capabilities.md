@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make UTF-8 normalization robust and make hearing-impaired and AI-translated result filtering truthful within each provider's metadata capabilities.
+**Goal:** Make UTF-8 normalization robust, make provider metadata filtering truthful, and centralize configurable video-media discovery.
 
-**Architecture:** Keep search policy enforcement centralized in `SearchCoordinator`, while ensuring provider clients return the broadest result set needed for local filtering. Keep encoding conversion in `JobCoordinator` as a provider-independent post-download operation and use the installed `chardet` dependency only after deterministic Unicode decoding fails.
+**Architecture:** Keep search policy enforcement centralized in `SearchCoordinator`, while ensuring provider clients return the broadest result set needed for local filtering. Keep encoding conversion in `JobCoordinator` as a provider-independent post-download operation. Resolve one canonical media-extension set in `tui.media` and pass it to both TUI and headless path expansion.
 
 **Tech Stack:** Python 3.10+, pytest, requests, chardet, Textual TUI domain/provider layers.
 
@@ -15,6 +15,7 @@
 - Do not add translation features or alter result ranking.
 - Preserve unrelated working-tree changes, especially the existing `Readme.md` edits.
 - Use application-side filtering as the final policy boundary.
+- Normalize media extensions to lowercase without a leading dot; exclusions win over inclusions.
 
 ---
 
@@ -247,7 +248,108 @@ git add Readme.md tui/tests/test_providers.py test_subtitle_utils.py
 git commit -m "Document subtitle provider filter capabilities"
 ```
 
-### Task 4: Final integration verification
+### Task 4: Centralize configurable media extensions
+
+**Files:**
+- Modify: `tui/media.py`
+- Modify: `tui/config.py`
+- Modify: `tui/app.py`
+- Modify: `download_subs.py`
+- Modify: `config.yaml.sample`
+- Modify: `Readme.md`
+- Test: `tui/tests/test_media.py`
+- Test: `tui/tests/test_config.py`
+- Test: `tui/tests/test_headless.py`
+
+**Interfaces:**
+- Produces: `DEFAULT_MEDIA_EXTENSIONS: frozenset[str]` and `resolve_media_extensions(include: Iterable[str] = (), exclude: Iterable[str] = ()) -> set[str]`.
+- Consumes: `GeneralConfig.media_extensions_include: list[str]` and `GeneralConfig.media_extensions_exclude: list[str]`, loaded from `general.media_extensions.include` and `.exclude`.
+
+- [ ] **Step 1: Write failing resolution and configuration tests**
+
+Add tests proving representative defaults (`mkv`, `mp4`, `avi`, `av1`), normalization, custom additions, and exclusion precedence:
+
+```python
+def test_resolve_media_extensions_extends_and_excludes_defaults():
+    extensions = resolve_media_extensions(
+        include=[".CUSTOM", "ts"],
+        exclude=[".TS", "AVI"],
+    )
+    assert "custom" in extensions
+    assert "mkv" in extensions
+    assert "ts" not in extensions
+    assert "avi" not in extensions
+```
+
+Extend config tests with:
+
+```yaml
+general:
+  media_extensions:
+    include: [custom]
+    exclude: [wmv]
+```
+
+and assert the two normalized lists load and save under the nested mapping.
+
+- [ ] **Step 2: Run the focused tests and verify they fail**
+
+Run: `python -m pytest tui/tests/test_media.py tui/tests/test_config.py -v`
+
+Expected: FAIL because the resolver and config fields do not exist.
+
+- [ ] **Step 3: Implement the canonical resolver and config mapping**
+
+In `tui/media.py`, replace the narrow mutable constant with:
+
+```python
+DEFAULT_MEDIA_EXTENSIONS = frozenset({
+    "3g2", "3gp", "asf", "avi", "av1", "divx", "f4v", "flv",
+    "h264", "h265", "hevc", "m2ts", "m2v", "m4v", "mkv", "mov",
+    "mp4", "mpeg", "mpg", "mts", "mxf", "ogm", "ogv", "rm",
+    "rmvb", "ts", "vob", "webm", "wmv",
+})
+
+
+def resolve_media_extensions(include=(), exclude=()):
+    normalize = lambda value: str(value).strip().lower().lstrip(".")
+    additions = {normalized for value in include if (normalized := normalize(value))}
+    removals = {normalized for value in exclude if (normalized := normalize(value))}
+    return (set(DEFAULT_MEDIA_EXTENSIONS) | additions) - removals
+```
+
+Add typed include/exclude lists to `GeneralConfig`, load them from the nested
+mapping, and save the nested mapping without flattening it into unrelated keys.
+
+- [ ] **Step 4: Route both execution modes through the resolver**
+
+In `SubsApp`, resolve from `self.application_config.general` before calling
+`expand_media_paths`. In `run_legacy`, load the validated `ApplicationConfig`
+already used for all-provider mode or resolve the raw `general.media_extensions`
+mapping, then pass the resulting set to `expand_media_paths`. Remove imports and
+uses of the old `MEDIA_EXTENSIONS` name.
+
+- [ ] **Step 5: Run discovery, config, startup, and headless tests**
+
+Run: `python -m pytest tui/tests/test_media.py tui/tests/test_config.py tui/tests/test_startup.py tui/tests/test_headless.py -v`
+
+Expected: PASS.
+
+- [ ] **Step 6: Document defaults and overrides**
+
+Add `general.media_extensions.include` and `.exclude` to `config.yaml.sample`
+and the README configuration example. State that exclusions win, recursive mode
+still filters files through the effective list, and
+`cleaning_subtitles.supported_media` refers to subtitle formats.
+
+- [ ] **Step 7: Commit media discovery behavior**
+
+```bash
+git add tui/media.py tui/config.py tui/app.py download_subs.py config.yaml.sample Readme.md tui/tests/test_media.py tui/tests/test_config.py tui/tests/test_headless.py
+git commit -m "Centralize configurable media discovery"
+```
+
+### Task 5: Final integration verification
 
 **Files:**
 - Verify only; no planned production modifications.
@@ -266,7 +368,7 @@ Expected: PASS.
 
 Run: `python -m ruff check tui library download_subs.py`
 
-Run: `git diff --check HEAD~3..HEAD`
+Run: `git diff --check HEAD~4..HEAD`
 
 Expected: PASS with no whitespace errors.
 
@@ -274,6 +376,6 @@ Expected: PASS with no whitespace errors.
 
 Run: `git status --short`
 
-Run: `git diff HEAD~3 -- tui library tui/tests test_subtitle_utils.py Readme.md`
+Run: `git diff HEAD~4 -- tui library tui/tests test_subtitle_utils.py Readme.md config.yaml.sample download_subs.py`
 
 Expected: only task-scoped changes plus the user's pre-existing README work are present; no credentials or generated files are included.

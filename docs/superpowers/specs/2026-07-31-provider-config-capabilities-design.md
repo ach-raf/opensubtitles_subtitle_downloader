@@ -4,7 +4,8 @@
 
 Make `opt_force_utf8`, `hearing_impaired`, and `show_ai_translated` behave
 truthfully across the TUI and headless flows, while respecting differences in
-provider APIs and metadata.
+provider APIs and metadata. Consolidate video-media discovery so individual
+files and folder expansion use one extensible allowlist.
 
 ## Design
 
@@ -46,6 +47,31 @@ AI-translation marker in the client response. SubDL candidates will therefore
 remain unclassified rather than guessed; the setting is best-effort for that
 provider. Documentation will state this limitation.
 
+### Media extension discovery
+
+`tui.media` will own one canonical `DEFAULT_MEDIA_EXTENSIONS` set. It will
+cover common containers and raw video streams, including `mkv`, `mp4`, `avi`,
+and `av1`. Both TUI and headless discovery will resolve their effective set
+from this same source before expanding input files or folders.
+
+Configuration may extend or reduce the defaults without copying the entire
+list:
+
+```yaml
+general:
+  media_extensions:
+    include: []
+    exclude: []
+```
+
+Values are normalized to lowercase and may be written with or without a
+leading dot. Empty entries are ignored. Exclusion wins when an extension is in
+both lists. Omitting the section uses all built-in defaults. The same effective
+set applies to direct files, non-recursive folders, and recursive folders.
+
+`cleaning_subtitles.supported_media` remains the list of subtitle formats the
+cleaner supports; it is not used for video discovery.
+
 ## Validation and tests
 
 Tests will prove that:
@@ -56,6 +82,9 @@ Tests will prove that:
 - SubDL's absent AI marker remains false rather than being inferred;
 - UTF-8, UTF-16, and a non-CP1252 legacy encoding normalize to valid UTF-8;
 - disabling `opt_force_utf8` leaves downloaded bytes unchanged;
+- the default media set accepts representative containers and raw AV1 input;
+- configured extensions can be added and excluded with exclusion precedence;
+- TUI and headless discovery receive the same resolved media extension set;
 - existing search, provider, post-processing, headless, and configuration tests
   continue to pass.
 
@@ -63,4 +92,5 @@ Tests will prove that:
 
 This change does not add provider translation features, inspect subtitle text
 to guess whether it was AI-generated or intended for hearing-impaired viewers,
-or alter result ranking. It will not modify unrelated working-tree changes.
+inspect file contents to guess whether an unsupported extension is a video, or
+alter result ranking. It will not modify unrelated working-tree changes.
