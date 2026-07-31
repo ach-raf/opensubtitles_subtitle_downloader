@@ -8,6 +8,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
+from charset_normalizer import from_bytes
+
 from tui.domain import (
     Candidate,
     DownloadResult,
@@ -209,7 +211,14 @@ class JobCoordinator:
             try:
                 text = data.decode("utf-8-sig")
             except UnicodeDecodeError:
-                text = data.decode("cp1252")
+                match = from_bytes(data).best()
+                encoding = match.encoding if match is not None else "cp1252"
+                if encoding.lower().replace("-", "_").startswith(("utf_16", "utf_32")):
+                    encoding = "cp1252"
+                try:
+                    text = data.decode(encoding)
+                except (LookupError, UnicodeDecodeError):
+                    text = data.decode("cp1252")
         temporary = subtitle_path.with_name(f".{subtitle_path.name}.utf8.tmp")
         try:
             temporary.write_text(text, encoding="utf-8", newline="\n")

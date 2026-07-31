@@ -11,6 +11,16 @@ def candidate_for(provider, provider_id="77"):
     )
 
 
+def encoded_download(tmp_path, text, encoding):
+    subtitle = tmp_path / "Movie.en.srt"
+    subtitle.write_bytes(text.encode(encoding))
+    return subtitle, DownloadResult(
+        provider=Provider.SUBDL,
+        media_path=tmp_path / "Movie.mkv",
+        subtitle_path=subtitle,
+    )
+
+
 class RecordingAdapter:
     def __init__(self, provider):
         self.provider = provider
@@ -127,6 +137,7 @@ def test_download_reports_unwritable_output_directory(tmp_path, monkeypatch):
         tmp_path / "library" / "Movie.mkv",
     )
 
+
     assert result.succeeded is False
     assert "access denied" in result.error
 
@@ -188,6 +199,55 @@ def test_force_utf8_normalizes_legacy_encoded_subtitle(tmp_path):
 
     assert result.utf8_normalized
     assert subtitle.read_text(encoding="utf-8") == "café"
+
+
+def test_force_utf8_normalizes_utf16_subtitle(tmp_path):
+    subtitle, download = encoded_download(tmp_path, "hello", "utf-16")
+
+    result = JobCoordinator({}).postprocess(
+        download,
+        force_utf8=True,
+        clean=False,
+        sync=False,
+    )
+
+    assert result.utf8_normalized
+    assert subtitle.read_bytes() == b"hello"
+
+
+def test_force_utf8_detects_windows_1256_subtitle(tmp_path):
+    text = (
+        "1\n00:00:01,000 --> 00:00:04,000\n"
+        "مرحبا بكم في هذا الفيلم الرائع، نأمل أن تستمتعوا بالمشاهدة.\n\n"
+        "2\n00:00:05,000 --> 00:00:09,000\n"
+        "هذه جملة عربية طويلة لاختبار ترميز النصوص القديمة.\n"
+    )
+    subtitle, download = encoded_download(tmp_path, text, "windows-1256")
+
+    result = JobCoordinator({}).postprocess(
+        download,
+        force_utf8=True,
+        clean=False,
+        sync=False,
+    )
+
+    assert result.utf8_normalized
+    assert subtitle.read_text(encoding="utf-8") == text
+
+
+def test_disabled_force_utf8_preserves_original_bytes(tmp_path):
+    original = "café".encode("cp1252")
+    subtitle, download = encoded_download(tmp_path, "café", "cp1252")
+
+    result = JobCoordinator({}).postprocess(
+        download,
+        force_utf8=False,
+        clean=False,
+        sync=False,
+    )
+
+    assert result.utf8_normalized is False
+    assert subtitle.read_bytes() == original
 
 
 def test_postprocess_forwards_live_sync_output(tmp_path):

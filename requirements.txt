@@ -1,5 +1,6 @@
 requests
 chardet<6
+charset-normalizer>=3,<4
 black
 ffmpeg
 ffsubsync
