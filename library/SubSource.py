@@ -356,7 +356,7 @@ class SubSource:
 
     def _gather_candidates(self, path, language) -> list[dict[str, Any]]:
         """Resolve movie ids, fetch subtitles for each, then dedupe by subtitle id."""
-        media_name = path.stem
+        media_name = self.subtitle_utils.normalize_media_name(path.stem)
         subs: list[dict[str, Any]] = []
 
         video_season, video_episode = self.subtitle_utils.extract_season_and_episode(

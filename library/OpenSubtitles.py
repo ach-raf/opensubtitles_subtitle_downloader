@@ -129,7 +129,9 @@ class OpenSubtitles:
                 media_hash = self.subtitle_utils.hashFile(media_path) or ""
             except (OSError, ValueError):
                 media_hash = ""
-        effective_query = query.strip() or media_path.stem
+        effective_query = self.subtitle_utils.normalize_media_name(
+            query.strip() or media_path.stem
+        )
         queries = [effective_query]
         series_match = re.search(
             r"(.+?)(?:\s-\sS\d{2}E\d{2}|\s-\s\d{4})",

@@ -20,6 +20,11 @@ CURRENT_DIR_PATH = os.path.dirname(os.path.realpath(__file__))
 TOKEN_STORAGE_FILE = os.path.join(CURRENT_DIR_PATH, "token.pkl")
 # ====================================================================
 
+# Release naming drops apostrophes entirely ("Widow's Bay" -> "Widows Bay"),
+# so they are removed rather than treated as token separators when matching
+# or building provider search queries.
+APOSTROPHE_RE = re.compile(r"['\u2018\u2019\u02BB\u02BC`\u00B4]")
+
 
 class SubtitleUtils:
     console = Console()
@@ -321,9 +326,17 @@ class SubtitleUtils:
         return None, None
 
     @staticmethod
+    def normalize_media_name(value):
+        """Drop apostrophes so queries match scene naming ("Widow's Bay" -> "Widows Bay")."""
+        if not value:
+            return value
+        return APOSTROPHE_RE.sub("", str(value))
+
+    @staticmethod
     def _normalize_match_text(value):
         text = unicodedata.normalize("NFKC", str(value or ""))
         text = re.sub(r"[\u2010-\u2015\u2212]", "-", text)
+        text = APOSTROPHE_RE.sub("", text)
         text = text.replace("_", " ").replace(".", " ")
         text = re.sub(r"[^0-9A-Za-z]+", " ", text)
         return " ".join(text.lower().split())

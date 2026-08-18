@@ -180,7 +180,7 @@ class SubDL:
 
     def _gather_candidates(self, path, language):
         """Run all search sources, merge, filter, and dedupe into one candidate list."""
-        media_name = path.stem
+        media_name = self.subtitle_utils.normalize_media_name(path.stem)
         subs = []
         metadata = []
 

@@ -15,6 +15,10 @@ PITT_QUERY = (
 UNRELATED_S01E01 = (
     "The.World.of.the.Married.S01E01.720p.WEB-DL.x264-Pahe.in"
 )
+WIDOWS_BAY_QUERY = (
+    "Widow's Bay (2026) - S01E01 - - Welcome to Widows Bay! "
+    "[ATVP WEBDL-2160p][10bit][h265][EAC3 Atmos 5.1]-Friday4KPopcorn"
+)
 
 
 def test_same_series_conflicts_outrank_unrelated_exact_episode(scorer):
@@ -83,3 +87,17 @@ def test_one_shared_generic_title_token_does_not_establish_same_series(scorer):
     )
 
     assert same_title_unknown_episode > misleading
+
+
+def test_apostrophe_title_matches_apostrophe_free_release(scorer):
+    # Release naming drops apostrophes ("Widow's Bay" -> "Widows Bay"), so a
+    # video whose title carries one must still match the scene-named release
+    # as the same series.
+    same_series = scorer.score_subtitle(
+        "Widows.Bay.2026.S01E01.ATVP.WEB-DL.2160p.HDR.H.265",
+        WIDOWS_BAY_QUERY,
+    )
+    unrelated = scorer.score_subtitle(UNRELATED_S01E01, WIDOWS_BAY_QUERY)
+
+    assert same_series >= 90
+    assert same_series > unrelated

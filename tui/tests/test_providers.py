@@ -3,6 +3,7 @@ from pathlib import Path
 from library.OpenSubtitles import OpenSubtitles
 from library.SubDL import SubDL
 from library.SubSource import SubSource
+from library.subtitle_utils import SubtitleUtils
 from tui.config import (
     ApplicationConfig,
     CleaningConfig,
@@ -187,6 +188,7 @@ def test_opensubtitles_candidates_add_hash_and_filename_results(tmp_path):
         (),
         {
             "hashFile": staticmethod(lambda _path: "movie-hash"),
+            "normalize_media_name": staticmethod(SubtitleUtils.normalize_media_name),
             "get_alternate_names": staticmethod(
                 lambda _name: ["Dune Prophecy S01E01", "Dune.Prophecy.1x01"]
             ),
@@ -229,6 +231,81 @@ def test_opensubtitles_candidates_add_hash_and_filename_results(tmp_path):
     assert len(results) == 6
     shared = next(row for row in results if row["id"] == "shared")
     assert shared["attributes"]["moviehash_match"] is True
+
+
+def test_opensubtitles_search_queries_drop_apostrophes(tmp_path):
+    media = tmp_path / "Widow's Bay (2026) - S01E01 - - Welcome.mkv"
+    media.touch()
+    client = object.__new__(OpenSubtitles)
+    client.subtitle_utils = type(
+        "SearchUtils",
+        (),
+        {
+            "hashFile": staticmethod(lambda _path: ""),
+            "normalize_media_name": staticmethod(SubtitleUtils.normalize_media_name),
+            "get_alternate_names": staticmethod(lambda _name: []),
+        },
+    )()
+    queries = []
+
+    def search(*, media_hash, media_name, languages):
+        if media_name:
+            queries.append(media_name)
+        return []
+
+    client.search = search
+
+    client.search_candidates(media, "en", media.stem)
+
+    assert queries[0] == "Widows Bay (2026) - S01E01 - - Welcome"
+    assert "Widows Bay (2026)" in queries
+    assert all("'" not in name for name in queries)
+
+
+def test_subdl_search_queries_drop_apostrophes(tmp_path):
+    media = tmp_path / "Widow's Bay (2026) - S01E01.mkv"
+    client = object.__new__(SubDL)
+    client.console = QuietConsole()
+    client.hearing_impaired = False
+    client.subtitle_utils = SubtitleUtils()
+    queries = []
+
+    class EmptyResult:
+        subtitles = []
+        metadata_results = []
+
+    client.filename_search = lambda *, filename, **_kwargs: (
+        queries.append(filename),
+        EmptyResult(),
+    )[1]
+
+    def search(**kwargs):
+        for kind in ("file_name", "film_name"):
+            if kwargs.get(kind):
+                queries.append(kwargs[kind])
+        return EmptyResult()
+
+    client.search = search
+    client.movie_search = lambda q, **_kwargs: queries.append(q) or []
+
+    client._gather_candidates(media, "en")
+
+    assert "Widows Bay (2026)" in queries
+    assert all("'" not in name for name in queries)
+
+
+def test_subsource_search_queries_drop_apostrophes(tmp_path):
+    media = tmp_path / "Widow's Bay (2026) - S01E01.mkv"
+    client = object.__new__(SubSource)
+    client.console = QuietConsole()
+    client.hearing_impaired = False
+    client.subtitle_utils = SubtitleUtils()
+    queries = []
+    client.movie_search = lambda query="", **_kwargs: queries.append(query) or []
+
+    client._gather_candidates(media, "en")
+
+    assert queries == ["Widows Bay (2026)"]
 
 
 def test_opensubtitles_legacy_download_uses_external_output_directory(tmp_path):
